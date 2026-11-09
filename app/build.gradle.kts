@@ -7,6 +7,19 @@ android {
     namespace = "com.wsfisch.mobile"
     compileSdk = 35
 
+android {
+    // Остальные настройки оставь как есть
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
     defaultConfig {
         applicationId = "com.wsfisch.mobile"
         minSdk = 26
