@@ -1,3 +1,4 @@
+
 package com.wsfisch.mobile
 
 import android.content.Intent
@@ -27,11 +28,13 @@ class MainActivity : AppCompatActivity() {
     private var waitingForOverlayPermission = false
     private var pendingScript = ""
 
-    private val backgroundColor = Color.rgb(13, 17, 25)
-    private val cardColor = Color.rgb(24, 30, 42)
-    private val accentColor = Color.rgb(91, 111, 255)
-    private val textColor = Color.WHITE
-    private val mutedColor = Color.rgb(157, 168, 188)
+    // Спокойная серо-синяя палитра
+    private val backgroundColor = Color.rgb(226, 229, 234)
+    private val cardColor = Color.rgb(242, 244, 247)
+    private val accentColor = Color.rgb(37, 99, 235)
+    private val textColor = Color.rgb(31, 41, 55)
+    private val mutedColor = Color.rgb(101, 112, 132)
+    private val successColor = Color.rgb(22, 145, 92)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -41,38 +44,65 @@ class MainActivity : AppCompatActivity() {
     private fun buildInterface() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(20), dp(26), dp(20), dp(24))
+            gravity = Gravity.CENTER
+            setPadding(
+                dp(18),
+                dp(18),
+                dp(18),
+                dp(18)
+            )
             setBackgroundColor(backgroundColor)
+
+            // Центрирование по вертикали, пока контент помещается.
+            // Если контента станет больше экрана — появится прокрутка.
+            minimumHeight = (
+                resources.displayMetrics.heightPixels - dp(70)
+            ).coerceAtLeast(0)
         }
 
         val scroll = ScrollView(this).apply {
             isFillViewport = true
-            addView(root)
+            setBackgroundColor(backgroundColor)
+            addView(
+                root,
+                ScrollView.LayoutParams(
+                    ScrollView.LayoutParams.MATCH_PARENT,
+                    ScrollView.LayoutParams.WRAP_CONTENT
+                )
+            )
         }
 
         val title = TextView(this).apply {
             text = "WSFISCH"
-            textSize = 29f
-            typeface = Typeface.DEFAULT_BOLD
+            textSize = 25f
+            typeface = Typeface.create(
+                "sans-serif",
+                Typeface.BOLD
+            )
             setTextColor(textColor)
             gravity = Gravity.CENTER
         }
 
         val subtitle = TextView(this).apply {
             text = "MOBILE MACRO"
-            textSize = 12f
-            letterSpacing = 0.22f
+            textSize = 10f
+            letterSpacing = 0.20f
             setTextColor(mutedColor)
             gravity = Gravity.CENTER
+            setPadding(0, dp(2), 0, dp(12))
         }
 
         statusText = TextView(this).apply {
-            text = "● Готов к работе"
-            textSize = 14f
-            setTextColor(Color.rgb(91, 220, 160))
+            text = "Проверка состояния..."
+            textSize = 12f
+            setTextColor(successColor)
             gravity = Gravity.CENTER
-            setPadding(0, dp(18), 0, dp(18))
+            setPadding(
+                dp(8),
+                dp(8),
+                dp(8),
+                dp(14)
+            )
         }
 
         root.addView(title)
@@ -82,10 +112,12 @@ class MainActivity : AppCompatActivity() {
         // Разрешения
         val permissionsCard = makeCard()
 
-        permissionsCard.addView(sectionTitle("РАЗРЕШЕНИЯ"))
+        permissionsCard.addView(
+            sectionTitle("РАЗРЕШЕНИЯ")
+        )
 
         permissionsCard.addView(
-            makeButton("Включить управление касаниями") {
+            makeButton("Управление касаниями") {
                 startActivity(
                     Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                 )
@@ -93,54 +125,70 @@ class MainActivity : AppCompatActivity() {
         )
 
         permissionsCard.addView(
-            makeButton("Разрешить поверх окон") {
+            makeButton("Разрешение поверх окон") {
                 openOverlaySettings()
             }
         )
 
         permissionsCard.addView(
-            makeButton("Проверить разрешения") {
+            makeButton("Проверить состояние") {
                 updateStatus()
             }
         )
 
-        root.addView(permissionsCard, matchWidth())
+        root.addView(
+            permissionsCard,
+            matchWidth()
+        )
 
         // Захват экрана
         val captureCard = makeCard()
 
-        captureCard.addView(sectionTitle("ЗАХВАТ ЭКРАНА"))
+        captureCard.addView(
+            sectionTitle("ЭКРАН")
+        )
 
         captureCard.addView(
-            makeButton("▶ Начать захват экрана") {
+            makeButton("Начать захват") {
                 requestScreenCapture()
             }
         )
 
         captureCard.addView(
-            makeButton("■ Остановить захват") {
+            makeButton("Остановить захват") {
                 stopScreenCapture()
             }
         )
 
-        root.addView(captureCard, matchWidth())
+        root.addView(
+            captureCard,
+            matchWidth()
+        )
 
-        // Настройки и запуск
+        // Макрос
         val macroCard = makeCard()
 
-        macroCard.addView(sectionTitle("МАКРОС"))
+        macroCard.addView(
+            sectionTitle("МАКРОС")
+        )
 
         val description = TextView(this).apply {
-            text = "Сценарий автоматически собирается из выбранной удочки и сохранённых параметров."
-            textSize = 13f
+            text = "Настрой удочку и запусти плавающую панель управления."
+            textSize = 12f
             setTextColor(mutedColor)
-            setPadding(0, 0, 0, dp(12))
+            gravity = Gravity.CENTER
+            setPadding(
+                dp(4),
+                0,
+                dp(4),
+                dp(10)
+            )
         }
 
         macroCard.addView(description)
 
         macroCard.addView(
-            makeButton("🎣 НАСТРОЙКИ УДОЧЕК") {
+            makeButton("Настройки удочек") {
                 RodSettingsDialog.show(this) {
                     statusText.text = "Настройки сохранены"
                 }
@@ -148,25 +196,28 @@ class MainActivity : AppCompatActivity() {
         )
 
         macroCard.addView(
-            makeButton("▶ СОБРАТЬ И ЗАПУСТИТЬ") {
+            makeButton("Собрать и запустить") {
                 prepareMacro()
             }
         )
 
         macroCard.addView(
-            makeButton("■ ОСТАНОВИТЬ МАКРОС") {
+            makeButton("Остановить макрос") {
                 stopMacro()
             }
         )
 
-        root.addView(macroCard, matchWidth())
+        root.addView(
+            macroCard,
+            matchWidth()
+        )
 
         val footer = TextView(this).apply {
-            text = "WSFisch Mobile • Alpha"
-            textSize = 11f
+            text = "WSFisch Mobile · Alpha"
+            textSize = 10f
             setTextColor(mutedColor)
             gravity = Gravity.CENTER
-            setPadding(0, dp(20), 0, dp(4))
+            setPadding(0, dp(12), 0, dp(2))
         }
 
         root.addView(footer)
@@ -175,16 +226,12 @@ class MainActivity : AppCompatActivity() {
         updateStatus()
     }
 
-    /**
-     * Собирает сценарий из SharedPreferences.
-     * Редактор скрипта больше не нужен.
-     */
     private fun prepareMacro() {
         try {
             pendingScript = MacroScriptBuilder.build(this)
 
             if (pendingScript.isBlank()) {
-                statusText.text = "⚠ Не удалось собрать сценарий"
+                statusText.text = "Не удалось собрать сценарий"
                 return
             }
 
@@ -200,11 +247,11 @@ class MainActivity : AppCompatActivity() {
             showFloatingControls()
 
             statusText.text =
-                "● Сценарий собран: ${config.specialRod}"
+                "Панель готова · ${config.specialRod}"
 
         } catch (e: Exception) {
             statusText.text =
-                "Ошибка сборки: ${e.message ?: "unknown"}"
+                "Ошибка: ${e.message ?: "unknown"}"
         }
     }
 
@@ -217,7 +264,7 @@ class MainActivity : AppCompatActivity() {
             if (Settings.canDrawOverlays(this)) {
                 showFloatingControls()
             } else {
-                statusText.text = "⚠ Разрешение не выдано"
+                statusText.text = "Разрешение не выдано"
             }
         }
 
@@ -226,7 +273,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showFloatingControls() {
         if (pendingScript.isBlank()) {
-            statusText.text = "⚠ Сценарий не собран"
+            statusText.text = "Сначала собери сценарий"
             return
         }
 
@@ -243,7 +290,7 @@ class MainActivity : AppCompatActivity() {
 
         try {
             startService(intent)
-            statusText.text = "● Плавающая панель готова"
+            statusText.text = "Плавающая панель готова"
         } catch (e: Exception) {
             statusText.text = "Ошибка: ${e.message}"
         }
@@ -320,7 +367,7 @@ class MainActivity : AppCompatActivity() {
                 startService(serviceIntent)
             }
 
-            statusText.text = "● Запуск захвата экрана..."
+            statusText.text = "Запуск захвата экрана..."
         } catch (e: Exception) {
             statusText.text =
                 "Ошибка захвата: ${e.message}"
@@ -337,7 +384,7 @@ class MainActivity : AppCompatActivity() {
 
         try {
             startService(intent)
-            statusText.text = "Захват экрана остановлен"
+            statusText.text = "Захват остановлен"
         } catch (e: Exception) {
             statusText.text =
                 "Ошибка остановки: ${e.message}"
@@ -395,15 +442,18 @@ class MainActivity : AppCompatActivity() {
     private fun makeCard(): LinearLayout {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+
             setPadding(
-                dp(16),
-                dp(16),
-                dp(16),
-                dp(16)
+                dp(14),
+                dp(13),
+                dp(14),
+                dp(8)
             )
-            background = roundBackground(
+
+            background = rounded(
                 cardColor,
-                20
+                15
             )
         }
     }
@@ -411,11 +461,17 @@ class MainActivity : AppCompatActivity() {
     private fun sectionTitle(value: String): TextView {
         return TextView(this).apply {
             text = value
-            textSize = 12f
+            textSize = 10f
             typeface = Typeface.DEFAULT_BOLD
-            letterSpacing = 0.12f
+            letterSpacing = 0.13f
             setTextColor(mutedColor)
-            setPadding(0, 0, 0, dp(12))
+            gravity = Gravity.CENTER
+            setPadding(
+                0,
+                dp(1),
+                0,
+                dp(10)
+            )
         }
     }
 
@@ -425,35 +481,39 @@ class MainActivity : AppCompatActivity() {
     ): Button {
         return Button(this).apply {
             text = label
-            textSize = 13f
+            textSize = 12f
             isAllCaps = false
+            minHeight = 0
+            minimumHeight = 0
+            minWidth = 0
             setTextColor(Color.WHITE)
-            background = roundBackground(
+
+            background = rounded(
                 accentColor,
-                14
+                10
             )
+
             setPadding(
                 dp(8),
+                0,
                 dp(8),
-                dp(8),
-                dp(8)
+                0
             )
 
             setOnClickListener {
                 action()
             }
 
-            val params = LinearLayout.LayoutParams(
+            layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(50)
-            )
-
-            params.bottomMargin = dp(9)
-            layoutParams = params
+                dp(39)
+            ).apply {
+                bottomMargin = dp(7)
+            }
         }
     }
 
-    private fun roundBackground(
+    private fun rounded(
         color: Int,
         radius: Int
     ): GradientDrawable {
@@ -468,7 +528,7 @@ class MainActivity : AppCompatActivity() {
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply {
-            bottomMargin = dp(16)
+            bottomMargin = dp(11)
         }
 
     private fun dp(value: Int): Int =
