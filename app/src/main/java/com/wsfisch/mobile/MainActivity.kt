@@ -10,11 +10,14 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 
-/** Rod-related profile controls with defaults corresponding to the source profile values. */
 object RodSettingsDialog {
     private const val PREFS = "mobile_macro_rod_settings"
 
-    private data class NumberSetting(val key: String, val label: String, val defaultValue: String)
+    private data class NumberSetting(
+        val key: String,
+        val label: String,
+        val defaultValue: String
+    )
 
     private val numberSettings = listOf(
         NumberSetting("TryhardBarTol", "Tryhard bar tolerance", "20"),
@@ -81,14 +84,17 @@ object RodSettingsDialog {
             text = "Play minigame with Halibut"
             isChecked = prefs.getBoolean("HalibutPlayMinigame", true)
         }
+
         val clickSigns = CheckBox(activity).apply {
             text = "Stellarwave: click signs"
             isChecked = prefs.getBoolean("SwClickSigns", true)
         }
+
         val fastClicks = CheckBox(activity).apply {
             text = "Stellarwave: fast clicks"
             isChecked = prefs.getBoolean("SwFastClicks", false)
         }
+
         val retryClicks = CheckBox(activity).apply {
             text = "Stellarwave: retry clicks"
             isChecked = prefs.getBoolean("SwRetryClicks", false)
@@ -154,7 +160,9 @@ object RodSettingsDialog {
 
                 fields.forEach { (key, field) ->
                     val value = field.text.toString().trim()
-                    if (value.isNotEmpty()) editor.putString(key, value)
+                    if (value.isNotEmpty()) {
+                        editor.putString(key, value)
+                    }
                 }
 
                 editor.apply()
