@@ -1,5 +1,6 @@
 package com.wsfisch.mobile
 
+import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -119,7 +120,7 @@ class ScreenCaptureService : Service() {
                     intent.getParcelableExtra(EXTRA_RESULT_DATA)
                 }
 
-                if (resultCode != RESULT_OK || data == null) {
+                if (resultCode != Activity.RESULT_OK || data == null) {
                     Log.e(TAG, "Нет разрешения на захват экрана")
                     stopSelf(startId)
                     return START_NOT_STICKY
