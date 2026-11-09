@@ -5,4 +5,5 @@ public interface ScriptHost {
     void sleep(long millis) throws InterruptedException;
     void log(String message);
     boolean isStopRequested();
+    int pixelColor(int x, int y);
 }
