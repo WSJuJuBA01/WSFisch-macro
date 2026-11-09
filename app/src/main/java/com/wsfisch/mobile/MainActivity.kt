@@ -1,4 +1,3 @@
-
 package com.wsfisch.mobile
 
 import android.content.Intent
@@ -17,6 +16,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
 
 class MainActivity : AppCompatActivity() {
 
@@ -25,19 +25,31 @@ class MainActivity : AppCompatActivity() {
     }
 
     private lateinit var statusText: TextView
-
     private var waitingForOverlayPermission = false
     private var pendingScript = ""
 
-    private val backgroundColor = Color.rgb(226, 229, 234)
-    private val cardColor = Color.rgb(242, 244, 247)
-    private val accentColor = Color.rgb(37, 99, 235)
-    private val textColor = Color.rgb(31, 41, 55)
-    private val mutedColor = Color.rgb(101, 112, 132)
-    private val successColor = Color.rgb(22, 145, 92)
+    private val backgroundColor = Color.rgb(22, 26, 34)
+    private val cardColor = Color.rgb(33, 40, 52)
+    private val accentColor = Color.rgb(45, 105, 235)
+    private val textColor = Color.rgb(240, 243, 248)
+    private val mutedColor = Color.rgb(157, 167, 183)
+    private val successColor = Color.rgb(76, 201, 145)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        AppCompatDelegate.setDefaultNightMode(
+            AppCompatDelegate.MODE_NIGHT_YES
+        )
+
         super.onCreate(savedInstanceState)
+
+        window.statusBarColor = Color.rgb(16, 20, 27)
+        window.navigationBarColor = Color.rgb(16, 20, 27)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+            window.isStatusBarContrastEnforced = false
+        }
+
         buildInterface()
     }
 
@@ -50,7 +62,7 @@ class MainActivity : AppCompatActivity() {
 
             minimumHeight = (
                 resources.displayMetrics.heightPixels - dp(70)
-            ).coerceAtLeast(0)
+                ).coerceAtLeast(0)
         }
 
         val scroll = ScrollView(this).apply {
@@ -69,7 +81,10 @@ class MainActivity : AppCompatActivity() {
         val title = TextView(this).apply {
             text = "WSFISCH"
             textSize = 25f
-            typeface = Typeface.create("sans-serif", Typeface.BOLD)
+            typeface = Typeface.create(
+                "sans-serif",
+                Typeface.BOLD
+            )
             setTextColor(textColor)
             gravity = Gravity.CENTER
         }
@@ -95,10 +110,11 @@ class MainActivity : AppCompatActivity() {
         root.addView(subtitle)
         root.addView(statusText)
 
-        // Разрешения
         val permissionsCard = makeCard()
 
-        permissionsCard.addView(sectionTitle("РАЗРЕШЕНИЯ"))
+        permissionsCard.addView(
+            sectionTitle("РАЗРЕШЕНИЯ")
+        )
 
         permissionsCard.addView(
             makeButton("Управление касаниями") {
@@ -120,12 +136,16 @@ class MainActivity : AppCompatActivity() {
             }
         )
 
-        root.addView(permissionsCard, matchWidth())
+        root.addView(
+            permissionsCard,
+            matchWidth()
+        )
 
-        // Захват экрана
         val captureCard = makeCard()
 
-        captureCard.addView(sectionTitle("ЭКРАН"))
+        captureCard.addView(
+            sectionTitle("ЭКРАН")
+        )
 
         captureCard.addView(
             makeButton("Начать захват") {
@@ -139,15 +159,19 @@ class MainActivity : AppCompatActivity() {
             }
         )
 
-        root.addView(captureCard, matchWidth())
+        root.addView(
+            captureCard,
+            matchWidth()
+        )
 
-        // Макрос
         val macroCard = makeCard()
 
-        macroCard.addView(sectionTitle("МАКРОС"))
+        macroCard.addView(
+            sectionTitle("МАКРОС")
+        )
 
         val description = TextView(this).apply {
-            text = "Настрой удочку и запусти плавающую панель управления."
+            text = "Настрой удочку, оставь Roblox на экране и запусти панель. Макрос ищет Shake и мини-игру по изображению экрана."
             textSize = 12f
             setTextColor(mutedColor)
             gravity = Gravity.CENTER
@@ -176,10 +200,13 @@ class MainActivity : AppCompatActivity() {
             }
         )
 
-        root.addView(macroCard, matchWidth())
+        root.addView(
+            macroCard,
+            matchWidth()
+        )
 
         val footer = TextView(this).apply {
-            text = "WSFisch Mobile · Alpha"
+            text = "WSFisch Mobile · experimental vision"
             textSize = 10f
             setTextColor(mutedColor)
             gravity = Gravity.CENTER
@@ -201,7 +228,8 @@ class MainActivity : AppCompatActivity() {
                 return
             }
 
-            val config = MacroScriptBuilder.readConfig(this)
+            val config =
+                MacroScriptBuilder.readConfig(this)
 
             if (!Settings.canDrawOverlays(this)) {
                 waitingForOverlayPermission = true
@@ -212,7 +240,8 @@ class MainActivity : AppCompatActivity() {
 
             showFloatingControls()
 
-            statusText.text = "Панель готова · ${config.specialRod}"
+            statusText.text =
+                "Панель готова · ${config.specialRod}"
 
         } catch (e: Exception) {
             statusText.text =
@@ -247,6 +276,7 @@ class MainActivity : AppCompatActivity() {
             OverlayControlService::class.java
         ).apply {
             action = OverlayControlService.ACTION_SHOW
+
             putExtra(
                 OverlayControlService.EXTRA_SCRIPT,
                 pendingScript
@@ -278,9 +308,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestScreenCapture() {
-        val manager =
-            getSystemService(MEDIA_PROJECTION_SERVICE)
-                    as MediaProjectionManager
+        val manager = getSystemService(
+            MEDIA_PROJECTION_SERVICE
+        ) as MediaProjectionManager
 
         @Suppress("DEPRECATION")
         startActivityForResult(
@@ -295,7 +325,11 @@ class MainActivity : AppCompatActivity() {
         resultCode: Int,
         data: Intent?
     ) {
-        super.onActivityResult(requestCode, resultCode, data)
+        super.onActivityResult(
+            requestCode,
+            resultCode,
+            data
+        )
 
         if (requestCode != REQUEST_CAPTURE) return
 
@@ -345,7 +379,7 @@ class MainActivity : AppCompatActivity() {
 
         try {
             startService(intent)
-            statusText.text = "Захват остановлен"
+            statusText.text = "Остановка захвата..."
         } catch (e: Exception) {
             statusText.text = "Ошибка остановки: ${e.message}"
         }
@@ -369,8 +403,11 @@ class MainActivity : AppCompatActivity() {
         val overlayEnabled =
             Settings.canDrawOverlays(this)
 
-        val captureEnabled =
-            ScreenCaptureService.instance != null
+        val capture =
+            ScreenCaptureService.instance
+
+        val captureReady =
+            capture?.isCaptureReady() == true
 
         statusText.text = buildString {
             append(
@@ -389,13 +426,15 @@ class MainActivity : AppCompatActivity() {
                 }
             )
 
-            append(
-                if (captureEnabled) {
-                    "● Захват активен"
-                } else {
-                    "○ Захват выключен"
-                }
-            )
+            if (captureReady && capture != null) {
+                append(
+                    "● Кадры ${capture.frameWidth()}×" +
+                        "${capture.frameHeight()} · " +
+                        "${capture.frameAgeMs()} мс"
+                )
+            } else {
+                append("○ Нет свежих кадров экрана")
+            }
         }
     }
 
@@ -435,13 +474,13 @@ class MainActivity : AppCompatActivity() {
             text = label
             textSize = 12f
             isAllCaps = false
+
             minHeight = 0
             minimumHeight = 0
             minWidth = 0
+
             setTextColor(Color.WHITE)
-
             background = rounded(accentColor, 10)
-
             setPadding(dp(8), 0, dp(8), 0)
 
             setOnClickListener {
@@ -475,9 +514,9 @@ class MainActivity : AppCompatActivity() {
             bottomMargin = dp(11)
         }
 
-    private fun dp(value: Int): Int =
-        (
-            value *
-                resources.displayMetrics.density
-        ).toInt()
+    private fun dp(value: Int): Int {
+        return (
+            value * resources.displayMetrics.density
+            ).toInt()
+    }
 }
