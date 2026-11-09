@@ -2,6 +2,7 @@ package com.wsfisch.mobile
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.graphics.Color
 import android.text.InputType
 import android.view.ViewGroup
 import android.widget.CheckBox
@@ -24,31 +25,87 @@ object RodSettingsDialog {
     private val castSettings = listOf(
         NumberSetting(
             "CastXPercent",
-            "Положение кнопки заброса по X (%)",
+            "Положение заброса X (%)",
             "50"
         ),
         NumberSetting(
             "CastYPercent",
-            "Положение кнопки заброса по Y (%)",
-            "85"
+            "Положение заброса Y (%)",
+            "50"
         ),
         NumberSetting(
             "CastHoldMs",
-            "Время удержания заброса (мс)",
+            "Удержание заброса (мс)",
+            "1000"
+        ),
+        NumberSetting(
+            "WaitForBobberMs",
+            "Пауза после заброса (мс)",
+            "1000"
+        ),
+        NumberSetting(
+            "ShakeTimeoutMs",
+            "Тайм-аут поиска поклёвки (мс)",
+            "35000"
+        ),
+        NumberSetting(
+            "ReelTimeoutMs",
+            "Тайм-аут мини-игры (мс)",
+            "120000"
+        ),
+        NumberSetting(
+            "RecastDelayMs",
+            "Пауза перед следующим забросом (мс)",
             "1000"
         )
     )
 
     private val numberSettings = listOf(
-        NumberSetting("TryhardBarTol", "Tryhard bar tolerance", "20"),
-        NumberSetting("TryhardFishTol", "Tryhard fish tolerance", "14"),
-        NumberSetting("TryhardTrackTol", "Tryhard track tolerance", "20"),
-        NumberSetting("CastboundBarTol", "Castbound bar tolerance", "20"),
-        NumberSetting("CastboundFishTol", "Castbound fish tolerance", "20"),
-        NumberSetting("CastboundTrackTol", "Castbound track tolerance", "20"),
-        NumberSetting("StellarBarTol", "Stellarwave bar tolerance", "26"),
-        NumberSetting("StellarFishTol", "Stellarwave fish tolerance", "22"),
-        NumberSetting("StellarHeadTol", "Stellarwave head tolerance", "30")
+        NumberSetting(
+            "TryhardBarTol",
+            "Tryhard bar tolerance",
+            "20"
+        ),
+        NumberSetting(
+            "TryhardFishTol",
+            "Tryhard fish tolerance",
+            "14"
+        ),
+        NumberSetting(
+            "TryhardTrackTol",
+            "Tryhard track tolerance",
+            "20"
+        ),
+        NumberSetting(
+            "CastboundBarTol",
+            "Castbound bar tolerance",
+            "20"
+        ),
+        NumberSetting(
+            "CastboundFishTol",
+            "Castbound fish tolerance",
+            "20"
+        ),
+        NumberSetting(
+            "CastboundTrackTol",
+            "Castbound track tolerance",
+            "20"
+        ),
+        NumberSetting(
+            "StellarBarTol",
+            "Stellarwave bar tolerance",
+            "26"
+        ),
+        NumberSetting(
+            "StellarFishTol",
+            "Stellarwave fish tolerance",
+            "22"
+        ),
+        NumberSetting(
+            "StellarHeadTol",
+            "Stellarwave head tolerance",
+            "30"
+        )
     )
 
     private val colorSettings = listOf(
@@ -87,14 +144,26 @@ object RodSettingsDialog {
             Activity.MODE_PRIVATE
         )
 
-        val density = activity.resources.displayMetrics.density
+        val density =
+            activity.resources.displayMetrics.density
+
+        val darkText = Color.rgb(239, 243, 249)
+        val mutedText = Color.rgb(165, 176, 193)
 
         fun dp(value: Int) =
             (value * density).toInt()
 
         val content = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(12), dp(18), dp(12))
+
+            setPadding(
+                dp(18),
+                dp(12),
+                dp(18),
+                dp(12)
+            )
+
+            setBackgroundColor(Color.rgb(22, 26, 34))
         }
 
         val rodNames = arrayOf(
@@ -107,16 +176,16 @@ object RodSettingsDialog {
             "Bellona's Waraxe"
         )
 
-        val selected = prefs.getString(
-            "SpecialRod",
-            "None"
-        ) ?: "None"
+        val selected =
+            prefs.getString("SpecialRod", "None") ?: "None"
 
-        val selectedIndex = rodNames.indexOf(selected).coerceAtLeast(0)
+        val selectedIndex =
+            rodNames.indexOf(selected).coerceAtLeast(0)
 
         val rodButton = TextView(activity).apply {
             text = "Special rod: $selected  (tap to change)"
-            textSize = 16f
+            textSize = 15f
+            setTextColor(darkText)
             setPadding(0, dp(8), 0, dp(12))
 
             setOnClickListener {
@@ -127,7 +196,10 @@ object RodSettingsDialog {
                         selectedIndex
                     ) { dialog, which ->
                         prefs.edit()
-                            .putString("SpecialRod", rodNames[which])
+                            .putString(
+                                "SpecialRod",
+                                rodNames[which]
+                            )
                             .apply()
 
                         text =
@@ -144,6 +216,8 @@ object RodSettingsDialog {
 
         val halibut = CheckBox(activity).apply {
             text = "Play minigame with Halibut"
+            setTextColor(darkText)
+
             isChecked = prefs.getBoolean(
                 "HalibutPlayMinigame",
                 true
@@ -152,6 +226,8 @@ object RodSettingsDialog {
 
         val clickSigns = CheckBox(activity).apply {
             text = "Stellarwave: click signs"
+            setTextColor(darkText)
+
             isChecked = prefs.getBoolean(
                 "SwClickSigns",
                 true
@@ -160,6 +236,8 @@ object RodSettingsDialog {
 
         val fastClicks = CheckBox(activity).apply {
             text = "Stellarwave: fast clicks"
+            setTextColor(darkText)
+
             isChecked = prefs.getBoolean(
                 "SwFastClicks",
                 false
@@ -168,6 +246,8 @@ object RodSettingsDialog {
 
         val retryClicks = CheckBox(activity).apply {
             text = "Stellarwave: retry clicks"
+            setTextColor(darkText)
+
             isChecked = prefs.getBoolean(
                 "SwRetryClicks",
                 false
@@ -188,7 +268,8 @@ object RodSettingsDialog {
             content.addView(
                 TextView(activity).apply {
                     text = title
-                    textSize = 18f
+                    textSize = 17f
+                    setTextColor(darkText)
                     setPadding(0, dp(14), 0, dp(6))
                 }
             )
@@ -197,7 +278,8 @@ object RodSettingsDialog {
                 content.addView(
                     TextView(activity).apply {
                         text = setting.label
-                        textSize = 13f
+                        textSize = 12f
+                        setTextColor(mutedText)
                         setPadding(0, dp(5), 0, 0)
                     }
                 )
@@ -210,6 +292,9 @@ object RodSettingsDialog {
                     }
 
                     isSingleLine = true
+
+                    setTextColor(darkText)
+                    setHintTextColor(mutedText)
 
                     setText(
                         prefs.getString(
@@ -224,33 +309,60 @@ object RodSettingsDialog {
                 content.addView(
                     editor,
                     ViewGroup.LayoutParams.MATCH_PARENT,
-                    dp(48)
+                    dp(46)
                 )
             }
         }
 
-        addSection("Cast / Заброс", castSettings)
+        addSection(
+            "ЗАБРОС И ЦИКЛ",
+            castSettings
+        )
 
         content.addView(
             TextView(activity).apply {
-                text = "X и Y — положение центра кнопки заброса в процентах от экрана. Например, X = 50, Y = 85 означает центр по горизонтали и 85% высоты экрана."
-                textSize = 12f
-                setPadding(0, dp(4), 0, dp(8))
+                text = "X/Y — координаты удержания на экране. По умолчанию центр (50/50). Если игра не реагирует на заброс, сначала проверь, что удочка экипирована и точка не перекрыта игровыми кнопками."
+
+                textSize = 11f
+                setTextColor(mutedText)
+
+                setPadding(
+                    0,
+                    dp(4),
+                    0,
+                    dp(8)
+                )
             }
         )
 
-        addSection("Color calibration (hex)", colorSettings)
-        addSection("Color tolerances", numberSettings)
+        addSection(
+            "COLOR CALIBRATION (HEX)",
+            colorSettings
+        )
+
+        addSection(
+            "COLOR TOLERANCES",
+            numberSettings
+        )
 
         content.addView(
             TextView(activity).apply {
-                text = "Настройки заброса используются Android MacroRunner. Остальные параметры удочек пока сохраняются для следующих этапов реализации."
-                textSize = 12f
-                setPadding(0, dp(16), 0, dp(4))
+                text = "Примечание: текущий визуальный контроллер подключён для базового интерфейса Fisch. Параметры особых удочек сохраняются, но их уникальные режимы ещё не все реализованы."
+
+                textSize = 11f
+                setTextColor(mutedText)
+
+                setPadding(
+                    0,
+                    dp(14),
+                    0,
+                    dp(4)
+                )
             }
         )
 
         val scroll = ScrollView(activity).apply {
+            setBackgroundColor(Color.rgb(22, 26, 34))
             addView(content)
         }
 
@@ -260,24 +372,39 @@ object RodSettingsDialog {
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Save") { _, _ ->
 
-                val castX = fields["CastXPercent"]
-                    ?.text?.toString()?.toIntOrNull()
+                fun number(key: String): Int? {
+                    return fields[key]
+                        ?.text
+                        ?.toString()
+                        ?.trim()
+                        ?.toIntOrNull()
+                }
 
-                val castY = fields["CastYPercent"]
-                    ?.text?.toString()?.toIntOrNull()
+                val castX = number("CastXPercent")
+                val castY = number("CastYPercent")
+                val castHold = number("CastHoldMs")
+                val waitBobber = number("WaitForBobberMs")
+                val shakeTimeout = number("ShakeTimeoutMs")
+                val reelTimeout = number("ReelTimeoutMs")
+                val recastDelay = number("RecastDelayMs")
 
-                val castHold = fields["CastHoldMs"]
-                    ?.text?.toString()?.toIntOrNull()
+                val valid =
+                    castX != null && castX in 0..100 &&
+                    castY != null && castY in 0..100 &&
+                    castHold != null && castHold in 250..5000 &&
+                    waitBobber != null && waitBobber in 250..5000 &&
+                    shakeTimeout != null &&
+                    shakeTimeout in 10_000..90_000 &&
+                    reelTimeout != null &&
+                    reelTimeout in 30_000..180_000 &&
+                    recastDelay != null &&
+                    recastDelay in 300..5000
 
-                if (
-                    castX == null || castX !in 0..100 ||
-                    castY == null || castY !in 0..100 ||
-                    castHold == null || castHold !in 100..5000
-                ) {
+                if (!valid) {
                     AlertDialog.Builder(activity)
                         .setTitle("Некорректные настройки")
                         .setMessage(
-                            "X и Y должны быть от 0 до 100, время удержания — от 100 до 5000 мс. Открой настройки и исправь значения."
+                            "X/Y: 0–100; удержание и ожидание: 250–5000 мс; поиск поклёвки: 10000–90000 мс; мини-игра: 30000–180000 мс; пауза: 300–5000 мс."
                         )
                         .setPositiveButton("OK", null)
                         .show()
@@ -304,7 +431,8 @@ object RodSettingsDialog {
                     )
 
                 fields.forEach { (key, field) ->
-                    val value = field.text.toString().trim()
+                    val value =
+                        field.text.toString().trim()
 
                     if (value.isNotEmpty()) {
                         editor.putString(key, value)
