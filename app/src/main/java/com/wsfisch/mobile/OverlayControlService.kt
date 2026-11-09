@@ -15,33 +15,39 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
-import android.graphics.Point
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
-import com.wsfisch.engine.ScriptEngine
-import com.wsfisch.engine.ScriptHost
 
 class OverlayControlService : Service() {
 
     companion object {
-        const val ACTION_SHOW = "com.wsfisch.mobile.SHOW_OVERLAY"
-        const val ACTION_STOP_MACRO = "com.wsfisch.mobile.STOP_MACRO"
+        const val ACTION_SHOW =
+            "com.wsfisch.mobile.SHOW_OVERLAY"
+
+        const val ACTION_STOP_MACRO =
+            "com.wsfisch.mobile.STOP_MACRO"
+
         const val EXTRA_SCRIPT = "macro_script"
     }
 
     private lateinit var windowManager: WindowManager
+
     private var overlay: View? = null
     private var statusView: TextView? = null
 
-    private var scriptText = ""
     private val stopFlag = AtomicBoolean(false)
-    private var macroThread: Thread? = null
 
+    @Volatile
     private var running = false
+
+    private var macroThread: Thread? = null
 
     override fun onCreate() {
         super.onCreate()
-        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+
+        windowManager = getSystemService(
+            WINDOW_SERVICE
+        ) as WindowManager
     }
 
     override fun onStartCommand(
@@ -50,11 +56,7 @@ class OverlayControlService : Service() {
         startId: Int
     ): Int {
         when (intent?.action) {
-            ACTION_SHOW -> {
-                scriptText = intent.getStringExtra(EXTRA_SCRIPT) ?: ""
-                showOverlay()
-            }
-
+            ACTION_SHOW -> showOverlay()
             ACTION_STOP_MACRO -> stopMacro()
         }
 
@@ -70,14 +72,23 @@ class OverlayControlService : Service() {
                 "Разреши отображение поверх окон",
                 Toast.LENGTH_LONG
             ).show()
+
             stopSelf()
             return
         }
 
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-            background = rounded(Color.rgb(22, 28, 42), 18)
+            setPadding(
+                dp(12),
+                dp(10),
+                dp(12),
+                dp(10)
+            )
+            background = rounded(
+                Color.rgb(22, 28, 42),
+                18
+            )
         }
 
         val header = TextView(this).apply {
@@ -86,7 +97,12 @@ class OverlayControlService : Service() {
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            setPadding(dp(8), dp(5), dp(8), dp(12))
+            setPadding(
+                dp(8),
+                dp(5),
+                dp(8),
+                dp(12)
+            )
         }
 
         statusView = TextView(this).apply {
@@ -97,13 +113,29 @@ class OverlayControlService : Service() {
             setPadding(0, 0, 0, dp(8))
         }
 
-        val startButton = makeButton("▶ START", Color.rgb(65, 160, 110))
-        startButton.setOnClickListener { startMacro() }
+        val startButton = makeButton(
+            "▶ START",
+            Color.rgb(65, 160, 110)
+        )
 
-        val stopButton = makeButton("■ STOP", Color.rgb(190, 70, 80))
-        stopButton.setOnClickListener { stopMacro() }
+        startButton.setOnClickListener {
+            startMacro()
+        }
 
-        val closeButton = makeButton("× CLOSE", Color.rgb(65, 75, 95))
+        val stopButton = makeButton(
+            "■ STOP",
+            Color.rgb(190, 70, 80)
+        )
+
+        stopButton.setOnClickListener {
+            stopMacro()
+        }
+
+        val closeButton = makeButton(
+            "× CLOSE",
+            Color.rgb(65, 75, 95)
+        )
+
         closeButton.setOnClickListener {
             stopMacro()
             removeOverlay()
@@ -129,7 +161,9 @@ class OverlayControlService : Service() {
             y = dp(120)
         }
 
-        header.setOnTouchListener(DragListener(params))
+        header.setOnTouchListener(
+            DragListener(params)
+        )
 
         try {
             windowManager.addView(panel, params)
@@ -140,73 +174,48 @@ class OverlayControlService : Service() {
                 "Не удалось открыть панель: ${e.message}",
                 Toast.LENGTH_LONG
             ).show()
+
             stopSelf()
         }
     }
 
     private fun startMacro() {
-        if (running) return
-
-        if (scriptText.isBlank()) {
-            statusView?.text = "⚠ EMPTY SCRIPT"
+        if (running) {
+            updateOverlayStatus("Макрос уже запущен")
             return
         }
 
         if (MacroAccessibilityService.instance == null) {
-            statusView?.text = "⚠ ENABLE TOUCH SERVICE"
+            updateOverlayStatus(
+                "⚠ Включи управление касаниями"
+            )
+            return
+        }
+
+        if (ScreenCaptureService.instance == null) {
+            updateOverlayStatus(
+                "⚠ Сначала включи захват экрана"
+            )
             return
         }
 
         stopFlag.set(false)
         running = true
-        statusView?.text = "● RUNNING"
+
+        updateOverlayStatus("● ЗАПУСК")
 
         macroThread = thread(
             start = true,
-            name = "WSFischMacroThread"
+            name = "WSFischMacroRunner"
         ) {
             try {
-                val host = object : ScriptHost {
-                    override fun click(x: Float, y: Float) {
-                        if (stopFlag.get()) return
-
-                        val service = MacroAccessibilityService.instance
-                            ?: throw IllegalStateException(
-                                "Touch service is disabled"
-                            )
-
-                        service.tap(x, y)
-                    }
-
-                    override fun sleep(millis: Long) {
-                        var remaining = millis.coerceAtLeast(0)
-
-                        while (remaining > 0 && !stopFlag.get()) {
-                            val part = minOf(remaining, 100L)
-                            Thread.sleep(part)
-                            remaining -= part
-                        }
-                    }
-
-                    override fun log(message: String) {
+                MacroRunner.run(
+                    context = applicationContext,
+                    stopFlag = stopFlag,
+                    onStatus = { message ->
                         updateOverlayStatus(message)
                     }
-
-                    override fun isStopRequested(): Boolean {
-                        return stopFlag.get()
-                    }
-                }
-
-                ScriptEngine(host).run(scriptText)
-
-                updateOverlayStatus(
-                    if (stopFlag.get()) "■ STOPPED" else "✓ FINISHED"
                 )
-            } catch (e: InterruptedException) {
-                updateOverlayStatus("■ STOPPED")
-                Thread.currentThread().interrupt()
-            } catch (e: Exception) {
-                updateOverlayStatus("⚠ ${e.message ?: "SCRIPT ERROR"}")
             } finally {
                 running = false
                 macroThread = null
@@ -216,9 +225,12 @@ class OverlayControlService : Service() {
 
     private fun stopMacro() {
         stopFlag.set(true)
+
         macroThread?.interrupt()
+
         running = false
-        statusView?.text = "■ STOPPING"
+
+        updateOverlayStatus("■ ОСТАНОВКА")
     }
 
     private fun updateOverlayStatus(message: String) {
@@ -229,15 +241,20 @@ class OverlayControlService : Service() {
 
     private fun removeOverlay() {
         val old = overlay ?: return
+
         try {
             windowManager.removeView(old)
         } catch (_: Exception) {
         }
+
         overlay = null
         statusView = null
     }
 
-    private fun makeButton(label: String, color: Int): Button {
+    private fun makeButton(
+        label: String,
+        color: Int
+    ): Button {
         return Button(this).apply {
             text = label
             textSize = 12f
@@ -254,14 +271,19 @@ class OverlayControlService : Service() {
         }
     }
 
-    private fun rounded(color: Int, radius: Int) =
-        GradientDrawable().apply {
-            setColor(color)
-            cornerRadius = dp(radius).toFloat()
-        }
+    private fun rounded(
+        color: Int,
+        radius: Int
+    ) = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = dp(radius).toFloat()
+    }
 
     private fun dp(value: Int): Int =
-        (value * resources.displayMetrics.density).toInt()
+        (
+            value *
+                resources.displayMetrics.density
+        ).toInt()
 
     private inner class DragListener(
         private val params: WindowManager.LayoutParams
@@ -269,34 +291,50 @@ class OverlayControlService : Service() {
 
         private var initialX = 0
         private var initialY = 0
+
         private var touchX = 0f
         private var touchY = 0f
 
-        override fun onTouch(view: View, event: MotionEvent): Boolean {
+        override fun onTouch(
+            view: View,
+            event: MotionEvent
+        ): Boolean {
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
                     initialX = params.x
                     initialY = params.y
+
                     touchX = event.rawX
                     touchY = event.rawY
+
                     return true
                 }
 
                 MotionEvent.ACTION_MOVE -> {
-                    params.x = initialX + (event.rawX - touchX).toInt()
-                    params.y = initialY + (event.rawY - touchY).toInt()
+                    params.x =
+                        initialX +
+                        (event.rawX - touchX).toInt()
+
+                    params.y =
+                        initialY +
+                        (event.rawY - touchY).toInt()
 
                     try {
                         overlay?.let {
-                            windowManager.updateViewLayout(it, params)
+                            windowManager.updateViewLayout(
+                                it,
+                                params
+                            )
                         }
                     } catch (_: Exception) {
                     }
+
                     return true
                 }
 
                 MotionEvent.ACTION_UP -> return true
             }
+
             return false
         }
     }
