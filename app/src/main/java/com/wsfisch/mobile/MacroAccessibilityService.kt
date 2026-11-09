@@ -17,9 +17,7 @@ class MacroAccessibilityService : AccessibilityService() {
         instance = this
     }
 
-    override fun onAccessibilityEvent(
-        event: AccessibilityEvent?
-    ) {}
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
 
     override fun onInterrupt() {}
 
@@ -41,6 +39,25 @@ class MacroAccessibilityService : AccessibilityService() {
                     path,
                     0,
                     70
+                )
+            )
+            .build()
+
+        dispatchGesture(gesture, null, null)
+    }
+
+    fun swipe(startX: Float, startY: Float, endX: Float, endY: Float, durationMs: Long = 50L) {
+        val path = Path().apply {
+            moveTo(startX, startY)
+            lineTo(endX, endY)
+        }
+
+        val gesture = GestureDescription.Builder()
+            .addStroke(
+                GestureDescription.StrokeDescription(
+                    path,
+                    0,
+                    durationMs
                 )
             )
             .build()
