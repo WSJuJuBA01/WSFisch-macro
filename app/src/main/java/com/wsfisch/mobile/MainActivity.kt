@@ -1,5 +1,6 @@
 package com.wsfisch.mobile
 
+import android.app.Activity
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
@@ -333,7 +334,7 @@ class MainActivity : AppCompatActivity() {
 
         if (requestCode != REQUEST_CAPTURE) return
 
-        if (resultCode != RESULT_OK || data == null) {
+        if (resultCode != Activity.RESULT_OK || data == null) {
             statusText.text = "Захват экрана отменён"
             return
         }
