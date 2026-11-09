@@ -6,10 +6,9 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Handler
 import android.os.IBinder
 import android.view.Gravity
-import android.view.MotionEvent
-import android.view.View
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
@@ -31,8 +30,7 @@ class OverlayControlService : Service() {
     }
 
     private lateinit var windowManager: WindowManager
-
-    private var overlay: View? = null
+    private var overlay: LinearLayout? = null
     private var statusView: TextView? = null
 
     private val stopFlag = AtomicBoolean(false)
@@ -45,9 +43,8 @@ class OverlayControlService : Service() {
     override fun onCreate() {
         super.onCreate()
 
-        windowManager = getSystemService(
-            WINDOW_SERVICE
-        ) as WindowManager
+        windowManager =
+            getSystemService(WINDOW_SERVICE) as WindowManager
     }
 
     override fun onStartCommand(
@@ -78,92 +75,96 @@ class OverlayControlService : Service() {
         }
 
         val panel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(
-                dp(12),
-                dp(10),
-                dp(12),
-                dp(10)
-            )
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(7), dp(5), dp(7), dp(5))
             background = rounded(
-                Color.rgb(22, 28, 42),
-                18
+                Color.rgb(31, 38, 50),
+                14
+            )
+        }
+
+        val info = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(3), 0, dp(5), 0)
+
+            layoutParams = LinearLayout.LayoutParams(
+                dp(100),
+                dp(42)
             )
         }
 
         val header = TextView(this).apply {
-            text = "WSFISCH  ⋮"
-            textSize = 14f
+            text = "WSFISCH"
+            textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
+            setTextColor(Color.rgb(237, 241, 248))
             gravity = Gravity.CENTER
-            setPadding(
-                dp(8),
-                dp(5),
-                dp(8),
-                dp(12)
-            )
         }
 
         statusView = TextView(this).apply {
             text = "● READY"
-            textSize = 11f
-            setTextColor(Color.rgb(100, 220, 160))
+            textSize = 8f
+            setTextColor(Color.rgb(168, 181, 199))
             gravity = Gravity.CENTER
-            setPadding(0, 0, 0, dp(8))
+            maxLines = 2
         }
 
+        info.addView(header)
+        info.addView(statusView)
+
         val startButton = makeButton(
-            "▶ START",
-            Color.rgb(65, 160, 110)
+            "▶",
+            Color.rgb(45, 105, 235)
         )
 
+        startButton.contentDescription = "START"
         startButton.setOnClickListener {
             startMacro()
         }
 
         val stopButton = makeButton(
-            "■ STOP",
-            Color.rgb(190, 70, 80)
+            "■",
+            Color.rgb(65, 77, 96)
         )
 
+        stopButton.contentDescription = "STOP"
         stopButton.setOnClickListener {
             stopMacro()
         }
 
         val closeButton = makeButton(
-            "× CLOSE",
-            Color.rgb(65, 75, 95)
+            "×",
+            Color.rgb(49, 58, 73)
         )
 
+        closeButton.contentDescription = "CLOSE"
         closeButton.setOnClickListener {
             stopMacro()
             removeOverlay()
             stopSelf()
         }
 
-        panel.addView(header)
-        panel.addView(statusView)
+        panel.addView(info)
         panel.addView(startButton)
         panel.addView(stopButton)
         panel.addView(closeButton)
 
         val params = WindowManager.LayoutParams(
-            dp(190),
+            WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = dp(12)
-            y = dp(120)
-        }
+            gravity =
+                Gravity.TOP or Gravity.CENTER_HORIZONTAL
 
-        header.setOnTouchListener(
-            DragListener(params)
-        )
+            x = 0
+            y = dp(4)
+        }
 
         try {
             windowManager.addView(panel, params)
@@ -181,20 +182,22 @@ class OverlayControlService : Service() {
 
     private fun startMacro() {
         if (running) {
-            updateOverlayStatus("Макрос уже запущен")
+            updateOverlayStatus("Макрос уже работает")
             return
         }
 
         if (MacroAccessibilityService.instance == null) {
             updateOverlayStatus(
-                "⚠ Включи управление касаниями"
+                "Включи службу управления касаниями"
             )
             return
         }
 
-        if (ScreenCaptureService.instance == null) {
+        val capture = ScreenCaptureService.instance
+
+        if (capture == null || !capture.isCaptureReady()) {
             updateOverlayStatus(
-                "⚠ Сначала включи захват экрана"
+                "Нет свежих кадров · включи захват экрана"
             )
             return
         }
@@ -202,7 +205,7 @@ class OverlayControlService : Service() {
         stopFlag.set(false)
         running = true
 
-        updateOverlayStatus("● ЗАПУСК")
+        updateOverlayStatus("● ЗАПУСК · подготовка")
 
         macroThread = thread(
             start = true,
@@ -219,23 +222,27 @@ class OverlayControlService : Service() {
             } finally {
                 running = false
                 macroThread = null
+
+                if (!stopFlag.get()) {
+                    updateOverlayStatus(
+                        "Готово · проверь статус"
+                    )
+                }
             }
         }
     }
 
     private fun stopMacro() {
         stopFlag.set(true)
-
         macroThread?.interrupt()
-
         running = false
 
         updateOverlayStatus("■ ОСТАНОВКА")
     }
 
     private fun updateOverlayStatus(message: String) {
-        android.os.Handler(mainLooper).post {
-            statusView?.text = message.take(45)
+        Handler(mainLooper).post {
+            statusView?.text = message.take(76)
         }
     }
 
@@ -257,16 +264,22 @@ class OverlayControlService : Service() {
     ): Button {
         return Button(this).apply {
             text = label
-            textSize = 12f
+            textSize = 14f
             isAllCaps = false
+
+            minHeight = 0
+            minimumHeight = 0
+            minWidth = 0
+
             setTextColor(Color.WHITE)
-            background = rounded(color, 12)
+            background = rounded(color, 9)
+            setPadding(dp(3), 0, dp(3), 0)
 
             layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(42)
+                dp(42),
+                dp(36)
             ).apply {
-                bottomMargin = dp(6)
+                marginStart = dp(3)
             }
         }
     }
@@ -279,64 +292,10 @@ class OverlayControlService : Service() {
         cornerRadius = dp(radius).toFloat()
     }
 
-    private fun dp(value: Int): Int =
-        (
-            value *
-                resources.displayMetrics.density
-        ).toInt()
-
-    private inner class DragListener(
-        private val params: WindowManager.LayoutParams
-    ) : View.OnTouchListener {
-
-        private var initialX = 0
-        private var initialY = 0
-
-        private var touchX = 0f
-        private var touchY = 0f
-
-        override fun onTouch(
-            view: View,
-            event: MotionEvent
-        ): Boolean {
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    initialX = params.x
-                    initialY = params.y
-
-                    touchX = event.rawX
-                    touchY = event.rawY
-
-                    return true
-                }
-
-                MotionEvent.ACTION_MOVE -> {
-                    params.x =
-                        initialX +
-                        (event.rawX - touchX).toInt()
-
-                    params.y =
-                        initialY +
-                        (event.rawY - touchY).toInt()
-
-                    try {
-                        overlay?.let {
-                            windowManager.updateViewLayout(
-                                it,
-                                params
-                            )
-                        }
-                    } catch (_: Exception) {
-                    }
-
-                    return true
-                }
-
-                MotionEvent.ACTION_UP -> return true
-            }
-
-            return false
-        }
+    private fun dp(value: Int): Int {
+        return (
+            value * resources.displayMetrics.density
+            ).toInt()
     }
 
     override fun onDestroy() {
