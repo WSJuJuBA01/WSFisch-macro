@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">WSFisch Mobile Macro</string>
+    <string name="accessibility_description">
+        Executes touch gestures for user-authored macro scripts.
+    </string>
+</resources>
