@@ -1,21 +1,19 @@
 package com.wsfisch.mobile
 
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
-import android.view.View
 import android.widget.Button
-import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import android.graphics.Color
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import androidx.appcompat.app.AppCompatActivity
 
 class MainActivity : AppCompatActivity() {
@@ -25,7 +23,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private lateinit var statusText: TextView
-    private lateinit var editor: EditText
 
     private var waitingForOverlayPermission = false
     private var pendingScript = ""
@@ -82,77 +79,87 @@ class MainActivity : AppCompatActivity() {
         root.addView(subtitle)
         root.addView(statusText)
 
+        // Разрешения
         val permissionsCard = makeCard()
 
         permissionsCard.addView(sectionTitle("РАЗРЕШЕНИЯ"))
-        permissionsCard.addView(makeButton("Включить управление касаниями") {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        })
-        permissionsCard.addView(makeButton("Разрешить поверх окон") {
-            openOverlaySettings()
-        })
-        permissionsCard.addView(makeButton("Проверить разрешения") {
-            updateStatus()
-        })
+
+        permissionsCard.addView(
+            makeButton("Включить управление касаниями") {
+                startActivity(
+                    Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                )
+            }
+        )
+
+        permissionsCard.addView(
+            makeButton("Разрешить поверх окон") {
+                openOverlaySettings()
+            }
+        )
+
+        permissionsCard.addView(
+            makeButton("Проверить разрешения") {
+                updateStatus()
+            }
+        )
 
         root.addView(permissionsCard, matchWidth())
 
+        // Захват экрана
         val captureCard = makeCard()
+
         captureCard.addView(sectionTitle("ЗАХВАТ ЭКРАНА"))
-        captureCard.addView(makeButton("▶ Начать захват экрана") {
-            requestScreenCapture()
-        })
-        captureCard.addView(makeButton("■ Остановить захват") {
-            stopScreenCapture()
-        })
-        root.addView(captureCard, matchWidth())
 
-        val scriptCard = makeCard()
-        scriptCard.addView(sectionTitle("СКРИПТ"))
-
-        editor = EditText(this).apply {
-            setTextColor(textColor)
-            setHintTextColor(mutedColor)
-            textSize = 13f
-            gravity = Gravity.TOP or Gravity.START
-            setPadding(dp(14), dp(14), dp(14), dp(14))
-            minLines = 9
-            setBackground(roundBackground(Color.rgb(14, 19, 29), 14))
-            typeface = Typeface.MONOSPACE
-            hint = "Вставь сюда скрипт"
-
-            setText(
-                """
-                Loop, 3
-                {
-                    Click, 540, 960
-                    Sleep, 500
-                }
-                """.trimIndent()
-            )
-        }
-
-        scriptCard.addView(
-            editor,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(230)
-            )
+        captureCard.addView(
+            makeButton("▶ Начать захват экрана") {
+                requestScreenCapture()
+            }
         )
 
-        scriptCard.addView(makeButton("▶ ЗАПУСТИТЬ МАКРОС") {
-            prepareMacro()
-        })
+        captureCard.addView(
+            makeButton("■ Остановить захват") {
+                stopScreenCapture()
+            }
+        )
 
-        scriptCard.addView(makeButton("■ ОСТАНОВИТЬ МАКРОС") {
-            stopMacro()
-        })
+        root.addView(captureCard, matchWidth())
 
-        scriptCard.addView(makeButton("Настройки удочек") {
-            RodSettingsDialog.show(this)
-        })
+        // Настройки и запуск
+        val macroCard = makeCard()
 
-        root.addView(scriptCard, matchWidth())
+        macroCard.addView(sectionTitle("МАКРОС"))
+
+        val description = TextView(this).apply {
+            text = "Сценарий автоматически собирается из выбранной удочки и сохранённых параметров."
+            textSize = 13f
+            setTextColor(mutedColor)
+            setPadding(0, 0, 0, dp(12))
+        }
+
+        macroCard.addView(description)
+
+        macroCard.addView(
+            makeButton("🎣 НАСТРОЙКИ УДОЧЕК") {
+                RodSettingsDialog.show(this) {
+                    statusText.text = "Настройки сохранены"
+                }
+            }
+        )
+
+        macroCard.addView(
+            makeButton("▶ СОБРАТЬ И ЗАПУСТИТЬ") {
+                prepareMacro()
+            }
+        )
+
+        macroCard.addView(
+            makeButton("■ ОСТАНОВИТЬ МАКРОС") {
+                stopMacro()
+            }
+        )
+
+        root.addView(macroCard, matchWidth())
 
         val footer = TextView(this).apply {
             text = "WSFisch Mobile • Alpha"
@@ -163,31 +170,42 @@ class MainActivity : AppCompatActivity() {
         }
 
         root.addView(footer)
+
         setContentView(scroll)
         updateStatus()
     }
 
+    /**
+     * Собирает сценарий из SharedPreferences.
+     * Редактор скрипта больше не нужен.
+     */
     private fun prepareMacro() {
-        pendingScript = editor.text.toString()
+        try {
+            pendingScript = MacroScriptBuilder.build(this)
 
-        if (pendingScript.isBlank()) {
-            statusText.text = "⚠ Скрипт пустой"
-            return
+            if (pendingScript.isBlank()) {
+                statusText.text = "⚠ Не удалось собрать сценарий"
+                return
+            }
+
+            val config = MacroScriptBuilder.readConfig(this)
+
+            if (!Settings.canDrawOverlays(this)) {
+                waitingForOverlayPermission = true
+                statusText.text = "Нужно разрешение поверх окон"
+                openOverlaySettings()
+                return
+            }
+
+            showFloatingControls()
+
+            statusText.text =
+                "● Сценарий собран: ${config.specialRod}"
+
+        } catch (e: Exception) {
+            statusText.text =
+                "Ошибка сборки: ${e.message ?: "unknown"}"
         }
-
-        if (!Settings.canDrawOverlays(this)) {
-            waitingForOverlayPermission = true
-            statusText.text = "Нужно разрешение поверх окон"
-
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:$packageName")
-            )
-            startActivity(intent)
-            return
-        }
-
-        showFloatingControls()
     }
 
     override fun onResume() {
@@ -207,31 +225,50 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showFloatingControls() {
-        val intent = Intent(this, OverlayControlService::class.java).apply {
+        if (pendingScript.isBlank()) {
+            statusText.text = "⚠ Сценарий не собран"
+            return
+        }
+
+        val intent = Intent(
+            this,
+            OverlayControlService::class.java
+        ).apply {
             action = OverlayControlService.ACTION_SHOW
-            putExtra(OverlayControlService.EXTRA_SCRIPT, pendingScript)
+            putExtra(
+                OverlayControlService.EXTRA_SCRIPT,
+                pendingScript
+            )
         }
 
         try {
             startService(intent)
-            statusText.text = "● Плавающее управление запущено"
+            statusText.text = "● Плавающая панель готова"
         } catch (e: Exception) {
             statusText.text = "Ошибка: ${e.message}"
         }
     }
 
     private fun stopMacro() {
-        val intent = Intent(this, OverlayControlService::class.java).apply {
+        val intent = Intent(
+            this,
+            OverlayControlService::class.java
+        ).apply {
             action = OverlayControlService.ACTION_STOP_MACRO
         }
 
-        startService(intent)
-        statusText.text = "Остановка запрошена"
+        try {
+            startService(intent)
+            statusText.text = "Остановка запрошена"
+        } catch (e: Exception) {
+            statusText.text = "Ошибка остановки: ${e.message}"
+        }
     }
 
     private fun requestScreenCapture() {
         val manager =
-            getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            getSystemService(MEDIA_PROJECTION_SERVICE)
+                    as MediaProjectionManager
 
         @Suppress("DEPRECATION")
         startActivityForResult(
@@ -240,13 +277,17 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    @Deprecated("Using activity result for compatibility with current project")
+    @Deprecated("Using activity result for compatibility")
     override fun onActivityResult(
         requestCode: Int,
         resultCode: Int,
         data: Intent?
     ) {
-        super.onActivityResult(requestCode, resultCode, data)
+        super.onActivityResult(
+            requestCode,
+            resultCode,
+            data
+        )
 
         if (requestCode != REQUEST_CAPTURE) return
 
@@ -255,10 +296,21 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val serviceIntent = Intent(this, ScreenCaptureService::class.java).apply {
+        val serviceIntent = Intent(
+            this,
+            ScreenCaptureService::class.java
+        ).apply {
             action = ScreenCaptureService.ACTION_START
-            putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, resultCode)
-            putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, data)
+
+            putExtra(
+                ScreenCaptureService.EXTRA_RESULT_CODE,
+                resultCode
+            )
+
+            putExtra(
+                ScreenCaptureService.EXTRA_RESULT_DATA,
+                data
+            )
         }
 
         try {
@@ -267,14 +319,19 @@ class MainActivity : AppCompatActivity() {
             } else {
                 startService(serviceIntent)
             }
+
             statusText.text = "● Запуск захвата экрана..."
         } catch (e: Exception) {
-            statusText.text = "Ошибка захвата: ${e.message}"
+            statusText.text =
+                "Ошибка захвата: ${e.message}"
         }
     }
 
     private fun stopScreenCapture() {
-        val intent = Intent(this, ScreenCaptureService::class.java).apply {
+        val intent = Intent(
+            this,
+            ScreenCaptureService::class.java
+        ).apply {
             action = ScreenCaptureService.ACTION_STOP
         }
 
@@ -282,7 +339,8 @@ class MainActivity : AppCompatActivity() {
             startService(intent)
             statusText.text = "Захват экрана остановлен"
         } catch (e: Exception) {
-            statusText.text = "Ошибка остановки: ${e.message}"
+            statusText.text =
+                "Ошибка остановки: ${e.message}"
         }
     }
 
@@ -298,22 +356,55 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateStatus() {
-        val accessibilityEnabled = MacroAccessibilityService.instance != null
-        val overlayEnabled = Settings.canDrawOverlays(this)
-        val captureEnabled = ScreenCaptureService.instance != null
+        val accessibilityEnabled =
+            MacroAccessibilityService.instance != null
+
+        val overlayEnabled =
+            Settings.canDrawOverlays(this)
+
+        val captureEnabled =
+            ScreenCaptureService.instance != null
 
         statusText.text = buildString {
-            append(if (accessibilityEnabled) "● Касания включены\n" else "○ Касания выключены\n")
-            append(if (overlayEnabled) "● Поверх окон разрешено\n" else "○ Поверх окон запрещено\n")
-            append(if (captureEnabled) "● Захват активен" else "○ Захват выключен")
+            append(
+                if (accessibilityEnabled) {
+                    "● Касания включены\n"
+                } else {
+                    "○ Касания выключены\n"
+                }
+            )
+
+            append(
+                if (overlayEnabled) {
+                    "● Поверх окон разрешено\n"
+                } else {
+                    "○ Поверх окон запрещено\n"
+                }
+            )
+
+            append(
+                if (captureEnabled) {
+                    "● Захват активен"
+                } else {
+                    "○ Захват выключен"
+                }
+            )
         }
     }
 
     private fun makeCard(): LinearLayout {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(16), dp(16), dp(16))
-            background = roundBackground(cardColor, 20)
+            setPadding(
+                dp(16),
+                dp(16),
+                dp(16),
+                dp(16)
+            )
+            background = roundBackground(
+                cardColor,
+                20
+            )
         }
     }
 
@@ -337,20 +428,35 @@ class MainActivity : AppCompatActivity() {
             textSize = 13f
             isAllCaps = false
             setTextColor(Color.WHITE)
-            background = roundBackground(accentColor, 14)
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            setOnClickListener { action() }
+            background = roundBackground(
+                accentColor,
+                14
+            )
+            setPadding(
+                dp(8),
+                dp(8),
+                dp(8),
+                dp(8)
+            )
+
+            setOnClickListener {
+                action()
+            }
 
             val params = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(50)
             )
+
             params.bottomMargin = dp(9)
             layoutParams = params
         }
     }
 
-    private fun roundBackground(color: Int, radius: Int): GradientDrawable {
+    private fun roundBackground(
+        color: Int,
+        radius: Int
+    ): GradientDrawable {
         return GradientDrawable().apply {
             setColor(color)
             cornerRadius = dp(radius).toFloat()
@@ -366,5 +472,8 @@ class MainActivity : AppCompatActivity() {
         }
 
     private fun dp(value: Int): Int =
-        (value * resources.displayMetrics.density).toInt()
+        (
+            value *
+                resources.displayMetrics.density
+        ).toInt()
 }
