@@ -11,12 +11,32 @@ import android.widget.ScrollView
 import android.widget.TextView
 
 object RodSettingsDialog {
+
     private const val PREFS = "mobile_macro_rod_settings"
 
     private data class NumberSetting(
         val key: String,
         val label: String,
-        val defaultValue: String
+        val defaultValue: String,
+        val numeric: Boolean = true
+    )
+
+    private val castSettings = listOf(
+        NumberSetting(
+            "CastXPercent",
+            "Положение кнопки заброса по X (%)",
+            "50"
+        ),
+        NumberSetting(
+            "CastYPercent",
+            "Положение кнопки заброса по Y (%)",
+            "85"
+        ),
+        NumberSetting(
+            "CastHoldMs",
+            "Время удержания заброса (мс)",
+            "1000"
+        )
     )
 
     private val numberSettings = listOf(
@@ -32,16 +52,45 @@ object RodSettingsDialog {
     )
 
     private val colorSettings = listOf(
-        NumberSetting("CastboundFishColors", "Castbound sword color (hex)", "0x5522A3"),
-        NumberSetting("StellarBarColors", "Stellarwave bar color (hex)", "0x55446D"),
-        NumberSetting("StellarFishColors", "Stellarwave fish color (hex)", "0xAFDAE8"),
-        NumberSetting("StellarHeadColors", "Stellarwave head color (hex)", "0xFFFFFF")
+        NumberSetting(
+            "CastboundFishColors",
+            "Castbound sword color (hex)",
+            "0x5522A3",
+            false
+        ),
+        NumberSetting(
+            "StellarBarColors",
+            "Stellarwave bar color (hex)",
+            "0x55446D",
+            false
+        ),
+        NumberSetting(
+            "StellarFishColors",
+            "Stellarwave fish color (hex)",
+            "0xAFDAE8",
+            false
+        ),
+        NumberSetting(
+            "StellarHeadColors",
+            "Stellarwave head color (hex)",
+            "0xFFFFFF",
+            false
+        )
     )
 
-    fun show(activity: Activity, onSaved: () -> Unit = {}) {
-        val prefs = activity.getSharedPreferences(PREFS, Activity.MODE_PRIVATE)
+    fun show(
+        activity: Activity,
+        onSaved: () -> Unit = {}
+    ) {
+        val prefs = activity.getSharedPreferences(
+            PREFS,
+            Activity.MODE_PRIVATE
+        )
+
         val density = activity.resources.displayMetrics.density
-        fun dp(value: Int) = (value * density).toInt()
+
+        fun dp(value: Int) =
+            (value * density).toInt()
 
         val content = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
@@ -58,19 +107,32 @@ object RodSettingsDialog {
             "Bellona's Waraxe"
         )
 
-        val selected = prefs.getString("SpecialRod", "None") ?: "None"
+        val selected = prefs.getString(
+            "SpecialRod",
+            "None"
+        ) ?: "None"
+
         val selectedIndex = rodNames.indexOf(selected).coerceAtLeast(0)
 
         val rodButton = TextView(activity).apply {
             text = "Special rod: $selected  (tap to change)"
             textSize = 16f
             setPadding(0, dp(8), 0, dp(12))
+
             setOnClickListener {
                 AlertDialog.Builder(activity)
                     .setTitle("Special rod")
-                    .setSingleChoiceItems(rodNames, selectedIndex) { dialog, which ->
-                        prefs.edit().putString("SpecialRod", rodNames[which]).apply()
-                        text = "Special rod: ${rodNames[which]}  (tap to change)"
+                    .setSingleChoiceItems(
+                        rodNames,
+                        selectedIndex
+                    ) { dialog, which ->
+                        prefs.edit()
+                            .putString("SpecialRod", rodNames[which])
+                            .apply()
+
+                        text =
+                            "Special rod: ${rodNames[which]}  (tap to change)"
+
                         dialog.dismiss()
                     }
                     .setNegativeButton("Cancel", null)
@@ -82,22 +144,34 @@ object RodSettingsDialog {
 
         val halibut = CheckBox(activity).apply {
             text = "Play minigame with Halibut"
-            isChecked = prefs.getBoolean("HalibutPlayMinigame", true)
+            isChecked = prefs.getBoolean(
+                "HalibutPlayMinigame",
+                true
+            )
         }
 
         val clickSigns = CheckBox(activity).apply {
             text = "Stellarwave: click signs"
-            isChecked = prefs.getBoolean("SwClickSigns", true)
+            isChecked = prefs.getBoolean(
+                "SwClickSigns",
+                true
+            )
         }
 
         val fastClicks = CheckBox(activity).apply {
             text = "Stellarwave: fast clicks"
-            isChecked = prefs.getBoolean("SwFastClicks", false)
+            isChecked = prefs.getBoolean(
+                "SwFastClicks",
+                false
+            )
         }
 
         val retryClicks = CheckBox(activity).apply {
             text = "Stellarwave: retry clicks"
-            isChecked = prefs.getBoolean("SwRetryClicks", false)
+            isChecked = prefs.getBoolean(
+                "SwRetryClicks",
+                false
+            )
         }
 
         content.addView(halibut)
@@ -107,59 +181,131 @@ object RodSettingsDialog {
 
         val fields = linkedMapOf<String, EditText>()
 
-        fun addSection(title: String, settings: List<NumberSetting>) {
-            content.addView(TextView(activity).apply {
-                text = title
-                textSize = 18f
-                setPadding(0, dp(14), 0, dp(6))
-            })
+        fun addSection(
+            title: String,
+            settings: List<NumberSetting>
+        ) {
+            content.addView(
+                TextView(activity).apply {
+                    text = title
+                    textSize = 18f
+                    setPadding(0, dp(14), 0, dp(6))
+                }
+            )
 
             settings.forEach { setting ->
-                content.addView(TextView(activity).apply {
-                    text = setting.label
-                    textSize = 13f
-                    setPadding(0, dp(5), 0, 0)
-                })
+                content.addView(
+                    TextView(activity).apply {
+                        text = setting.label
+                        textSize = 13f
+                        setPadding(0, dp(5), 0, 0)
+                    }
+                )
 
                 val editor = EditText(activity).apply {
-                    inputType = if (setting.key.endsWith("Tol")) {
+                    inputType = if (setting.numeric) {
                         InputType.TYPE_CLASS_NUMBER
                     } else {
                         InputType.TYPE_CLASS_TEXT
                     }
+
                     isSingleLine = true
-                    setText(prefs.getString(setting.key, setting.defaultValue))
+
+                    setText(
+                        prefs.getString(
+                            setting.key,
+                            setting.defaultValue
+                        )
+                    )
                 }
 
                 fields[setting.key] = editor
-                content.addView(editor, ViewGroup.LayoutParams.MATCH_PARENT, dp(48))
+
+                content.addView(
+                    editor,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(48)
+                )
             }
         }
+
+        addSection("Cast / Заброс", castSettings)
+
+        content.addView(
+            TextView(activity).apply {
+                text = "X и Y — положение центра кнопки заброса в процентах от экрана. Например, X = 50, Y = 85 означает центр по горизонтали и 85% высоты экрана."
+                textSize = 12f
+                setPadding(0, dp(4), 0, dp(8))
+            }
+        )
 
         addSection("Color calibration (hex)", colorSettings)
         addSection("Color tolerances", numberSettings)
 
-        content.addView(TextView(activity).apply {
-            text = "Settings defaults adapted from WSFisch by Yato. This is an independent Android settings screen, not the Windows macro."
-            textSize = 12f
-            setPadding(0, dp(16), 0, dp(4))
-        })
+        content.addView(
+            TextView(activity).apply {
+                text = "Настройки заброса используются Android MacroRunner. Остальные параметры удочек пока сохраняются для следующих этапов реализации."
+                textSize = 12f
+                setPadding(0, dp(16), 0, dp(4))
+            }
+        )
 
-        val scroll = ScrollView(activity).apply { addView(content) }
+        val scroll = ScrollView(activity).apply {
+            addView(content)
+        }
 
         AlertDialog.Builder(activity)
             .setTitle("Rod settings")
             .setView(scroll)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Save") { _, _ ->
+
+                val castX = fields["CastXPercent"]
+                    ?.text?.toString()?.toIntOrNull()
+
+                val castY = fields["CastYPercent"]
+                    ?.text?.toString()?.toIntOrNull()
+
+                val castHold = fields["CastHoldMs"]
+                    ?.text?.toString()?.toIntOrNull()
+
+                if (
+                    castX == null || castX !in 0..100 ||
+                    castY == null || castY !in 0..100 ||
+                    castHold == null || castHold !in 100..5000
+                ) {
+                    AlertDialog.Builder(activity)
+                        .setTitle("Некорректные настройки")
+                        .setMessage(
+                            "X и Y должны быть от 0 до 100, время удержания — от 100 до 5000 мс. Открой настройки и исправь значения."
+                        )
+                        .setPositiveButton("OK", null)
+                        .show()
+
+                    return@setPositiveButton
+                }
+
                 val editor = prefs.edit()
-                    .putBoolean("HalibutPlayMinigame", halibut.isChecked)
-                    .putBoolean("SwClickSigns", clickSigns.isChecked)
-                    .putBoolean("SwFastClicks", fastClicks.isChecked)
-                    .putBoolean("SwRetryClicks", retryClicks.isChecked)
+                    .putBoolean(
+                        "HalibutPlayMinigame",
+                        halibut.isChecked
+                    )
+                    .putBoolean(
+                        "SwClickSigns",
+                        clickSigns.isChecked
+                    )
+                    .putBoolean(
+                        "SwFastClicks",
+                        fastClicks.isChecked
+                    )
+                    .putBoolean(
+                        "SwRetryClicks",
+                        retryClicks.isChecked
+                    )
 
                 fields.forEach { (key, field) ->
                     val value = field.text.toString().trim()
+
                     if (value.isNotEmpty()) {
                         editor.putString(key, value)
                     }
