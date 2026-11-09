@@ -19,11 +19,14 @@ import android.util.DisplayMetrics
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.abs
 
 class ScreenCaptureService : Service() {
+
     companion object {
         const val ACTION_START = "com.wsfisch.mobile.action.START_CAPTURE"
         const val ACTION_STOP = "com.wsfisch.mobile.action.STOP_CAPTURE"
+
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_RESULT_DATA = "resultData"
 
@@ -49,23 +52,31 @@ class ScreenCaptureService : Service() {
     private var imageThread: HandlerThread? = null
     private var imageHandler: Handler? = null
 
+    private var foregroundStarted = false
+    private var releasing = false
+
     override fun onCreate() {
         super.onCreate()
         instance = this
         createNotificationChannel()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    override fun onStartCommand(
+        intent: Intent?,
+        flags: Int,
+        startId: Int
+    ): Int {
         when (intent?.action) {
             ACTION_START -> startCapture(intent, startId)
+
             ACTION_STOP -> {
                 releaseCapture(stopProjection = true)
-                stopSelf()
+                stopSelf(startId)
             }
+
             else -> stopSelf(startId)
         }
 
-        // Projection consent is not cached or silently reused.
         return START_NOT_STICKY
     }
 
@@ -75,8 +86,12 @@ class ScreenCaptureService : Service() {
         }
 
         val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
+
         val resultData: Intent? = if (Build.VERSION.SDK_INT >= 33) {
-            intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
+            intent.getParcelableExtra(
+                EXTRA_RESULT_DATA,
+                Intent::class.java
+            )
         } else {
             @Suppress("DEPRECATION")
             intent.getParcelableExtra(EXTRA_RESULT_DATA)
@@ -87,12 +102,19 @@ class ScreenCaptureService : Service() {
             return
         }
 
-        // User consent was obtained by the activity before this service was started.
-        startForeground(NOTIFICATION_ID, buildNotification())
-
         try {
-            val manager = getSystemService(MediaProjectionManager::class.java)
-            val newProjection = manager.getMediaProjection(resultCode, resultData)
+            startForeground(
+                NOTIFICATION_ID,
+                buildNotification()
+            )
+            foregroundStarted = true
+
+            val manager =
+                getSystemService(MediaProjectionManager::class.java)
+
+            val newProjection =
+                manager.getMediaProjection(resultCode, resultData)
+
             projection = newProjection
 
             newProjection.registerCallback(
@@ -106,91 +128,139 @@ class ScreenCaptureService : Service() {
             )
 
             val metrics = DisplayMetrics()
+
             @Suppress("DEPRECATION")
             (getSystemService(WINDOW_SERVICE) as WindowManager)
                 .defaultDisplay.getRealMetrics(metrics)
 
+            val width = metrics.widthPixels
+            val height = metrics.heightPixels
+
             val reader = ImageReader.newInstance(
-                metrics.widthPixels,
-                metrics.heightPixels,
+                width,
+                height,
                 PixelFormat.RGBA_8888,
-                3
+                2
             )
+
             imageReader = reader
 
-            val thread = HandlerThread("ScreenFrameReader").also { it.start() }
+            val thread = HandlerThread("WSFischFrameReader")
+            thread.start()
+
             imageThread = thread
+
             val handler = Handler(thread.looper)
             imageHandler = handler
 
             reader.setOnImageAvailableListener(
-                { source -> copyLatestFrame(source) },
+                { source ->
+                    copyLatestFrame(source)
+                },
                 handler
             )
 
             virtualDisplay = newProjection.createVirtualDisplay(
-                "MobileMacroScreenCapture",
-                metrics.widthPixels,
-                metrics.heightPixels,
+                "WSFischMobileCapture",
+                width,
+                height,
                 metrics.densityDpi,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 reader.surface,
                 null,
                 handler
             )
+
+            if (virtualDisplay == null) {
+                throw IllegalStateException(
+                    "VirtualDisplay could not be created"
+                )
+            }
+
         } catch (e: Exception) {
+            android.util.Log.e(
+                "WSFischCapture",
+                "Capture startup failed",
+                e
+            )
+
             releaseCapture(stopProjection = true)
             stopSelf(startId)
-            throw e
         }
     }
 
     private fun copyLatestFrame(source: ImageReader) {
         val image = try {
             source.acquireLatestImage()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
             null
         } ?: return
 
         image.use { frame ->
-            val plane = frame.planes.firstOrNull() ?: return
-            val buffer = plane.buffer
-            val pixels = IntArray(frame.width * frame.height)
+            try {
+                val plane = frame.planes.firstOrNull() ?: return
+                val buffer = plane.buffer
 
-            for (y in 0 until frame.height) {
-                for (x in 0 until frame.width) {
-                    val offset = y * plane.rowStride + x * plane.pixelStride
-                    val red = buffer.get(offset).toInt() and 0xff
-                    val green = buffer.get(offset + 1).toInt() and 0xff
-                    val blue = buffer.get(offset + 2).toInt() and 0xff
-                    val alpha = if (plane.pixelStride >= 4) {
-                        buffer.get(offset + 3).toInt() and 0xff
-                    } else {
-                        0xff
+                val pixels = IntArray(frame.width * frame.height)
+
+                for (y in 0 until frame.height) {
+                    for (x in 0 until frame.width) {
+                        val offset =
+                            y * plane.rowStride + x * plane.pixelStride
+
+                        val red =
+                            buffer.get(offset).toInt() and 0xff
+
+                        val green =
+                            buffer.get(offset + 1).toInt() and 0xff
+
+                        val blue =
+                            buffer.get(offset + 2).toInt() and 0xff
+
+                        val alpha =
+                            if (plane.pixelStride >= 4) {
+                                buffer.get(offset + 3).toInt() and 0xff
+                            } else {
+                                0xff
+                            }
+
+                        pixels[y * frame.width + x] =
+                            (alpha shl 24) or
+                            (red shl 16) or
+                            (green shl 8) or
+                            blue
                     }
-
-                    pixels[y * frame.width + x] =
-                        (alpha shl 24) or (red shl 16) or (green shl 8) or blue
                 }
-            }
 
-            latestFrame.set(Frame(frame.width, frame.height, pixels))
+                latestFrame.set(
+                    Frame(frame.width, frame.height, pixels)
+                )
+            } catch (e: Exception) {
+                android.util.Log.w(
+                    "WSFischCapture",
+                    "Frame copy failed",
+                    e
+                )
+            }
         }
     }
 
-    /** Returns ARGB color at physical display-pixel coordinates. */
     fun pixelColor(x: Int, y: Int): Int {
         val frame = latestFrame.get()
-            ?: throw IllegalStateException("Waiting for the first screen frame")
+            ?: throw IllegalStateException(
+                "Waiting for the first screen frame"
+            )
 
-        require(x in 0 until frame.width && y in 0 until frame.height) {
-            "Pixel coordinates are outside ${frame.width}x${frame.height}"
+        require(
+            x in 0 until frame.width &&
+            y in 0 until frame.height
+        ) {
+            "Coordinates outside ${frame.width}x${frame.height}"
         }
 
         return frame.pixels[y * frame.width + x]
     }
 
-    /** Returns the first matching point, or null if no pixel matches. */
     fun findPixel(
         x1: Int,
         y1: Int,
@@ -199,10 +269,12 @@ class ScreenCaptureService : Service() {
         color: Int,
         tolerance: Int
     ): IntArray? {
-        require(tolerance in 0..255) { "Tolerance must be 0..255" }
+        require(tolerance in 0..255)
 
         val frame = latestFrame.get()
-            ?: throw IllegalStateException("Waiting for the first screen frame")
+            ?: throw IllegalStateException(
+                "Waiting for the first screen frame"
+            )
 
         val left = minOf(x1, x2).coerceIn(0, frame.width - 1)
         val right = maxOf(x1, x2).coerceIn(0, frame.width - 1)
@@ -216,14 +288,15 @@ class ScreenCaptureService : Service() {
         for (y in top..bottom) {
             for (x in left..right) {
                 val pixel = frame.pixels[y * frame.width + x]
+
                 val red = (pixel shr 16) and 0xff
                 val green = (pixel shr 8) and 0xff
                 val blue = pixel and 0xff
 
                 if (
-                    kotlin.math.abs(red - targetR) <= tolerance &&
-                    kotlin.math.abs(green - targetG) <= tolerance &&
-                    kotlin.math.abs(blue - targetB) <= tolerance
+                    abs(red - targetR) <= tolerance &&
+                    abs(green - targetG) <= tolerance &&
+                    abs(blue - targetB) <= tolerance
                 ) {
                     return intArrayOf(x, y)
                 }
@@ -234,49 +307,84 @@ class ScreenCaptureService : Service() {
     }
 
     private fun releaseCapture(stopProjection: Boolean) {
-        virtualDisplay?.release()
-        virtualDisplay = null
+        if (releasing) return
+        releasing = true
 
-        imageReader?.setOnImageAvailableListener(null, null)
-        imageReader?.close()
-        imageReader = null
+        try {
+            val oldProjection = projection
+            projection = null
 
-        latestFrame.set(null)
+            try {
+                virtualDisplay?.release()
+            } catch (_: Exception) {
+            }
+            virtualDisplay = null
 
-        imageThread?.quitSafely()
-        imageThread = null
-        imageHandler = null
+            try {
+                imageReader?.setOnImageAvailableListener(null, null)
+                imageReader?.close()
+            } catch (_: Exception) {
+            }
+            imageReader = null
 
-        val oldProjection = projection
-        projection = null
-        if (stopProjection) oldProjection?.stop()
+            latestFrame.set(null)
 
-        stopForeground(STOP_FOREGROUND_REMOVE)
+            try {
+                imageThread?.quitSafely()
+            } catch (_: Exception) {
+            }
+
+            imageThread = null
+            imageHandler = null
+
+            if (stopProjection) {
+                try {
+                    oldProjection?.stop()
+                } catch (_: Exception) {
+                }
+            }
+
+            if (foregroundStarted) {
+                try {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } catch (_: Exception) {
+                }
+                foregroundStarted = false
+            }
+        } finally {
+            releasing = false
+        }
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Screen capture",
+                "WSFisch screen capture",
                 NotificationManager.IMPORTANCE_LOW
             )
+
             getSystemService(NotificationManager::class.java)
                 .createNotificationChannel(channel)
         }
     }
 
-    private fun buildNotification(): Notification =
-        NotificationCompat.Builder(this, CHANNEL_ID)
+    private fun buildNotification(): Notification {
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_view)
-            .setContentTitle("Screen capture active")
-            .setContentText("Screen pixels are available to the macro")
+            .setContentTitle("WSFisch screen capture")
+            .setContentText("Screen capture is active")
             .setOngoing(true)
             .build()
+    }
 
     override fun onDestroy() {
         releaseCapture(stopProjection = true)
-        if (instance === this) instance = null
+
+        if (instance === this) {
+            instance = null
+        }
+
         super.onDestroy()
     }
 
