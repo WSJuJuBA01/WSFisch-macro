@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -28,7 +29,6 @@ class MainActivity : AppCompatActivity() {
     private var waitingForOverlayPermission = false
     private var pendingScript = ""
 
-    // Спокойная серо-синяя палитра
     private val backgroundColor = Color.rgb(226, 229, 234)
     private val cardColor = Color.rgb(242, 244, 247)
     private val accentColor = Color.rgb(37, 99, 235)
@@ -45,16 +45,9 @@ class MainActivity : AppCompatActivity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setPadding(
-                dp(18),
-                dp(18),
-                dp(18),
-                dp(18)
-            )
+            setPadding(dp(18), dp(18), dp(18), dp(18))
             setBackgroundColor(backgroundColor)
 
-            // Центрирование по вертикали, пока контент помещается.
-            // Если контента станет больше экрана — появится прокрутка.
             minimumHeight = (
                 resources.displayMetrics.heightPixels - dp(70)
             ).coerceAtLeast(0)
@@ -63,11 +56,12 @@ class MainActivity : AppCompatActivity() {
         val scroll = ScrollView(this).apply {
             isFillViewport = true
             setBackgroundColor(backgroundColor)
+
             addView(
                 root,
-                ScrollView.LayoutParams(
-                    ScrollView.LayoutParams.MATCH_PARENT,
-                    ScrollView.LayoutParams.WRAP_CONTENT
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
                 )
             )
         }
@@ -75,10 +69,7 @@ class MainActivity : AppCompatActivity() {
         val title = TextView(this).apply {
             text = "WSFISCH"
             textSize = 25f
-            typeface = Typeface.create(
-                "sans-serif",
-                Typeface.BOLD
-            )
+            typeface = Typeface.create("sans-serif", Typeface.BOLD)
             setTextColor(textColor)
             gravity = Gravity.CENTER
         }
@@ -97,12 +88,7 @@ class MainActivity : AppCompatActivity() {
             textSize = 12f
             setTextColor(successColor)
             gravity = Gravity.CENTER
-            setPadding(
-                dp(8),
-                dp(8),
-                dp(8),
-                dp(14)
-            )
+            setPadding(dp(8), dp(8), dp(8), dp(14))
         }
 
         root.addView(title)
@@ -112,9 +98,7 @@ class MainActivity : AppCompatActivity() {
         // Разрешения
         val permissionsCard = makeCard()
 
-        permissionsCard.addView(
-            sectionTitle("РАЗРЕШЕНИЯ")
-        )
+        permissionsCard.addView(sectionTitle("РАЗРЕШЕНИЯ"))
 
         permissionsCard.addView(
             makeButton("Управление касаниями") {
@@ -136,17 +120,12 @@ class MainActivity : AppCompatActivity() {
             }
         )
 
-        root.addView(
-            permissionsCard,
-            matchWidth()
-        )
+        root.addView(permissionsCard, matchWidth())
 
         // Захват экрана
         val captureCard = makeCard()
 
-        captureCard.addView(
-            sectionTitle("ЭКРАН")
-        )
+        captureCard.addView(sectionTitle("ЭКРАН"))
 
         captureCard.addView(
             makeButton("Начать захват") {
@@ -160,29 +139,19 @@ class MainActivity : AppCompatActivity() {
             }
         )
 
-        root.addView(
-            captureCard,
-            matchWidth()
-        )
+        root.addView(captureCard, matchWidth())
 
         // Макрос
         val macroCard = makeCard()
 
-        macroCard.addView(
-            sectionTitle("МАКРОС")
-        )
+        macroCard.addView(sectionTitle("МАКРОС"))
 
         val description = TextView(this).apply {
             text = "Настрой удочку и запусти плавающую панель управления."
             textSize = 12f
             setTextColor(mutedColor)
             gravity = Gravity.CENTER
-            setPadding(
-                dp(4),
-                0,
-                dp(4),
-                dp(10)
-            )
+            setPadding(dp(4), 0, dp(4), dp(10))
         }
 
         macroCard.addView(description)
@@ -207,10 +176,7 @@ class MainActivity : AppCompatActivity() {
             }
         )
 
-        root.addView(
-            macroCard,
-            matchWidth()
-        )
+        root.addView(macroCard, matchWidth())
 
         val footer = TextView(this).apply {
             text = "WSFisch Mobile · Alpha"
@@ -246,8 +212,7 @@ class MainActivity : AppCompatActivity() {
 
             showFloatingControls()
 
-            statusText.text =
-                "Панель готова · ${config.specialRod}"
+            statusText.text = "Панель готова · ${config.specialRod}"
 
         } catch (e: Exception) {
             statusText.text =
@@ -330,11 +295,7 @@ class MainActivity : AppCompatActivity() {
         resultCode: Int,
         data: Intent?
     ) {
-        super.onActivityResult(
-            requestCode,
-            resultCode,
-            data
-        )
+        super.onActivityResult(requestCode, resultCode, data)
 
         if (requestCode != REQUEST_CAPTURE) return
 
@@ -368,9 +329,9 @@ class MainActivity : AppCompatActivity() {
             }
 
             statusText.text = "Запуск захвата экрана..."
+
         } catch (e: Exception) {
-            statusText.text =
-                "Ошибка захвата: ${e.message}"
+            statusText.text = "Ошибка захвата: ${e.message}"
         }
     }
 
@@ -386,8 +347,7 @@ class MainActivity : AppCompatActivity() {
             startService(intent)
             statusText.text = "Захват остановлен"
         } catch (e: Exception) {
-            statusText.text =
-                "Ошибка остановки: ${e.message}"
+            statusText.text = "Ошибка остановки: ${e.message}"
         }
     }
 
@@ -451,10 +411,7 @@ class MainActivity : AppCompatActivity() {
                 dp(8)
             )
 
-            background = rounded(
-                cardColor,
-                15
-            )
+            background = rounded(cardColor, 15)
         }
     }
 
@@ -466,12 +423,7 @@ class MainActivity : AppCompatActivity() {
             letterSpacing = 0.13f
             setTextColor(mutedColor)
             gravity = Gravity.CENTER
-            setPadding(
-                0,
-                dp(1),
-                0,
-                dp(10)
-            )
+            setPadding(0, dp(1), 0, dp(10))
         }
     }
 
@@ -488,17 +440,9 @@ class MainActivity : AppCompatActivity() {
             minWidth = 0
             setTextColor(Color.WHITE)
 
-            background = rounded(
-                accentColor,
-                10
-            )
+            background = rounded(accentColor, 10)
 
-            setPadding(
-                dp(8),
-                0,
-                dp(8),
-                0
-            )
+            setPadding(dp(8), 0, dp(8), 0)
 
             setOnClickListener {
                 action()
