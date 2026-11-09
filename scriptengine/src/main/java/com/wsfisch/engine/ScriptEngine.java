@@ -6,9 +6,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class ScriptEngine {
-    public enum Dialect {
-        V1, V2, AUTO
-    }
+    private static final int MAX_LINES = 20000;
+    private static final int MAX_LOOP = 10000;
+    private static final int MAX_DEPTH = 32;
 
     private final ScriptHost host;
 
@@ -16,171 +16,81 @@ public final class ScriptEngine {
         this.host = host;
     }
 
-    public Dialect detectDialect(String source) {
-        if (source.contains("#Requires AutoHotkey v2"))
-            return Dialect.V2;
-
-        if (source.contains("#Requires AutoHotkey v1"))
-            return Dialect.V1;
-
-        if (source.matches("(?s).*\\bClick\\s*\\(.*"))
-            return Dialect.V2;
-
-        if (source.matches("(?s).*\\bClick\\s*,.*"))
-            return Dialect.V1;
-
-        return Dialect.AUTO;
-    }
-
     public void run(String source) throws InterruptedException {
         List<String> lines = new ArrayList<>();
-
         for (String raw : source.split("\\R")) {
             String line = raw.replaceFirst(";.*$", "").trim();
-
             if (!line.isEmpty() && !line.startsWith("#")) {
                 lines.add(line);
             }
         }
-
-        executeBlock(lines, 0, lines.size());
+        executeBlock(lines, 0, lines.size(), 0);
     }
 
-    private int executeBlock(
-        List<String> lines,
-        int start,
-        int end
-    ) throws InterruptedException {
-
+    private void executeBlock(List<String> lines, int start, int end, int depth) throws InterruptedException {
+        if (depth > MAX_DEPTH) throw new IllegalArgumentException("Maximum loop nesting exceeded");
         int i = start;
-
         while (i < end && !host.isStopRequested()) {
             String line = lines.get(i).trim();
-
-            if (line.equals("{")) {
-                i++;
-                continue;
-            }
-
-            if (line.equals("}")) {
-                return i + 1;
-            }
-
-            Matcher loop = Pattern.compile(
-                "(?i)^Loop(?:\\s*,\\s*|\\s+)(\\d+)\\s*\\{?$"
-            ).matcher(line);
-
-            if (loop.find()) {
+            if (line.equals("{") || line.equals("}")) { i++; continue; }
+            Matcher loop = Pattern.compile("(?i)^Loop(?:\\s*,\\s*|\\s+)(\\d+)\\s*\\{?$").matcher(line);
+            if (loop.matches()) {
+                int count = Integer.parseInt(loop.group(1));
                 int open = i;
-
                 if (!line.endsWith("{")) {
-                    if (i + 1 >= end ||
-                        !lines.get(i + 1).trim().equals("{")) {
-                        host.log("Loop: expected {");
-                        i++;
-                        continue;
-                    }
-
+                    if (i + 1 >= end || !lines.get(i + 1).trim().equals("{")) throw new IllegalArgumentException("Loop requires a block");
                     open = i + 1;
                 }
-
                 int close = findClose(lines, open + 1, end);
-
-                if (close < 0) {
-                    host.log("Loop: missing }");
-                    return end;
+                if (close < 0) throw new IllegalArgumentException("Loop missing closing brace");
+                for (int n = 0; n < count && !host.isStopRequested(); n++) {
+                    executeBlock(lines, open + 1, close, depth + 1);
                 }
-
-                int count = Integer.parseInt(loop.group(1));
-
-                for (int n = 0;
-                     n < count && !host.isStopRequested();
-                     n++) {
-                    executeBlock(lines, open + 1, close);
-                }
-
                 i = close + 1;
                 continue;
             }
-
-            if (executeCommand(line)) {
-                i++;
-                continue;
+            if (!executeCommand(line)) {
+                throw new IllegalArgumentException("Unsupported command: " + line);
             }
-
-            host.log("Unsupported command: " + line);
             i++;
         }
-
-        return i;
     }
 
-    private int findClose(
-        List<String> lines,
-        int start,
-        int end
-    ) {
+    private int findClose(List<String> lines, int start, int end) {
         int depth = 0;
-
         for (int i = start; i < end; i++) {
             String s = lines.get(i).trim();
-
             if (s.equals("{")) depth++;
-
             else if (s.equals("}")) {
                 if (depth == 0) return i;
                 depth--;
             }
         }
-
         return -1;
     }
 
-    private boolean executeCommand(String line)
-        throws InterruptedException {
-
-        Matcher clickV2 = Pattern.compile(
-            "(?i)^Click\\s*\\(\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)\\s*\\)\\s*$"
-        ).matcher(line);
-
-        Matcher clickV1 = Pattern.compile(
-            "(?i)^Click\\s*,\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)\\s*$"
-        ).matcher(line);
-
-        Matcher sleepV2 = Pattern.compile(
-            "(?i)^Sleep\\s*\\(\\s*(\\d+)\\s*\\)\\s*$"
-        ).matcher(line);
-
-        Matcher sleepV1 = Pattern.compile(
-            "(?i)^Sleep\\s*,\\s*(\\d+)\\s*$"
-        ).matcher(line);
-
-        if (clickV2.matches()) {
-            host.click(
-                Float.parseFloat(clickV2.group(1)),
-                Float.parseFloat(clickV2.group(2))
+    private boolean executeCommand(String line) throws InterruptedException {
+        Matcher click = Pattern.compile("(?i)^Click\\s*,\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)\\s*$").matcher(line);
+        if (click.matches()) {
+            host.click(Float.parseFloat(click.group(1)), Float.parseFloat(click.group(2)));
+            return true;
+        }
+        Matcher sleep = Pattern.compile("(?i)^Sleep\\s*,\\s*(\\d+)\\s*$").matcher(line);
+        if (sleep.matches()) {
+            host.sleep(Long.parseLong(sleep.group(1)));
+            return true;
+        }
+        Matcher swipe = Pattern.compile("(?i)^Swipe\\s*,\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(\\d+)\\s*$").matcher(line);
+        if (swipe.matches()) {
+            host.swipe(
+                    Float.parseFloat(swipe.group(1)),
+                    Float.parseFloat(swipe.group(2)),
+                    Float.parseFloat(swipe.group(3)),
+                    Float.parseFloat(swipe.group(4)),
+                    Long.parseLong(swipe.group(5))
             );
             return true;
         }
-
-        if (clickV1.matches()) {
-            host.click(
-                Float.parseFloat(clickV1.group(1)),
-                Float.parseFloat(clickV1.group(2))
-            );
-            return true;
-        }
-
-        if (sleepV2.matches()) {
-            host.sleep(Long.parseLong(sleepV2.group(1)));
-            return true;
-        }
-
-        if (sleepV1.matches()) {
-            host.sleep(Long.parseLong(sleepV1.group(1)));
-            return true;
-        }
-
         return false;
     }
-}
+                }
