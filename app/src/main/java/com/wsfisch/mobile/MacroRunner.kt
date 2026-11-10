@@ -100,14 +100,6 @@ object MacroRunner {
             val config = readConfig(context)
             val firstFrame = freshFrame(capture, stopFlag)
 
-            val reelTouchX =
-                (firstFrame.width / 2f)
-                    .coerceIn(2f, firstFrame.width - 3f)
-
-            val reelTouchY =
-                (firstFrame.height / 2f)
-                    .coerceIn(2f, firstFrame.height - 3f)
-
             onStatus(
                 "ГОТОВО: ${firstFrame.width}×${firstFrame.height} · ${config.specialRod}"
             )
@@ -150,8 +142,6 @@ object MacroRunner {
                     )
                 }
 
-                // Мини-игру проверяем сразу.
-                // Shake разрешаем искать после WaitForBobberMs.
                 onStatus("ПОИСК · отслеживаю мини-игру и SHAKE")
 
                 val waitResult = waitForShakeOrReel(
@@ -187,9 +177,10 @@ object MacroRunner {
                     capture = capture,
                     accessibility = accessibility,
                     initial = waitResult.reel,
+                    initialFrameWidth = waitResult.frameWidth,
+                    initialFrameHeight = waitResult.frameHeight,
+                    initialRotation = waitResult.frameRotation,
                     specialRod = config.specialRod,
-                    touchX = reelTouchX,
-                    touchY = reelTouchY,
                     timeoutMs = config.reelTimeoutMs,
                     stopFlag = stopFlag,
                     onStatus = onStatus
@@ -220,7 +211,10 @@ object MacroRunner {
 
     private data class WaitResult(
         val reel: ReelObservation?,
-        val shakeClicks: Int
+        val shakeClicks: Int,
+        val frameWidth: Int = 0,
+        val frameHeight: Int = 0,
+        val frameRotation: Int = -1
     )
 
     private fun waitForShakeOrReel(
@@ -233,6 +227,10 @@ object MacroRunner {
         val started = SystemClock.elapsedRealtime()
 
         var lastSequence = -1L
+
+        var lastFrameWidth = -1
+        var lastFrameHeight = -1
+        var lastFrameRotation = -2
 
         var lastClickedX = -1
         var lastClickedY = -1
@@ -255,6 +253,35 @@ object MacroRunner {
         ) {
             val frame = freshFrame(capture, stopFlag)
             if (stopFlag.get()) break
+
+            val currentRotation = capture.displayRotation()
+
+            // Поворот экрана: старые координаты и кандидаты больше не годятся.
+            if (
+                frame.width != lastFrameWidth ||
+                frame.height != lastFrameHeight ||
+                currentRotation != lastFrameRotation
+            ) {
+                lastFrameWidth = frame.width
+                lastFrameHeight = frame.height
+                lastFrameRotation = currentRotation
+
+                lastClickedX = -1
+                lastClickedY = -1
+                lastClickAt = 0L
+
+                lastCandidate = null
+                candidateStableFrames = 0
+
+                lastReelCandidate = null
+                reelStableFrames = 0
+
+                previousFish = null
+
+                onStatus(
+                    "ЭКРАН ОБНОВЛЁН · ${frame.width}×${frame.height}"
+                )
+            }
 
             if (frame.sequence == lastSequence) {
                 Thread.sleep(LOOP_SLEEP_MS)
@@ -308,7 +335,13 @@ object MacroRunner {
                         }"
                     )
 
-                    return WaitResult(reel, shakeClicks)
+                    return WaitResult(
+                        reel = reel,
+                        shakeClicks = shakeClicks,
+                        frameWidth = frame.width,
+                        frameHeight = frame.height,
+                        frameRotation = currentRotation
+                    )
                 }
 
                 if (
@@ -323,16 +356,13 @@ object MacroRunner {
                         SystemClock.elapsedRealtime()
                 }
 
-                // Если видим возможную полосу, не нажимаем её
-                // круглые элементы как будто это Shake.
                 lastCandidate = null
                 candidateStableFrames = 0
+
             } else {
                 lastReelCandidate = null
                 reelStableFrames = 0
 
-                // Ожидание поклёвки задерживает только поиск Shake.
-                // Распознавание мини-игры работает с первого кадра.
                 if (elapsed >= config.waitForBobberMs) {
                     val prompt = FischVision.detectShake(frame)
 
@@ -351,6 +381,7 @@ object MacroRunner {
                             lastStatusAt =
                                 SystemClock.elapsedRealtime()
                         }
+
                     } else {
                         val now =
                             SystemClock.elapsedRealtime()
@@ -399,6 +430,20 @@ object MacroRunner {
                             (movedToNewPrompt || canRetrySame) &&
                             (confident || stable)
                         ) {
+                            // Не нажимаем по координатам старого кадра,
+                            // если Android уже сменил геометрию дисплея.
+                            val geometryStillCurrent =
+                                capture.isCaptureReady(FRAME_MAX_AGE_MS) &&
+                                    capture.frameWidth() == frame.width &&
+                                    capture.frameHeight() == frame.height &&
+                                    capture.displayRotation() == currentRotation
+
+                            if (!geometryStillCurrent) {
+                                lastCandidate = null
+                                candidateStableFrames = 0
+                                continue
+                            }
+
                             val tapped = accessibility.tap(
                                 prompt.x.toFloat(),
                                 prompt.y.toFloat(),
@@ -424,6 +469,7 @@ object MacroRunner {
                             }
 
                             candidateStableFrames = 0
+
                         } else if (
                             SystemClock.elapsedRealtime() - lastStatusAt >
                             1_100L
@@ -440,6 +486,7 @@ object MacroRunner {
                                 SystemClock.elapsedRealtime()
                         }
                     }
+
                 } else if (
                     SystemClock.elapsedRealtime() - lastStatusAt >
                     1_000L
@@ -456,7 +503,10 @@ object MacroRunner {
             Thread.sleep(LOOP_SLEEP_MS)
         }
 
-        return WaitResult(null, shakeClicks)
+        return WaitResult(
+            reel = null,
+            shakeClicks = shakeClicks
+        )
     }
 
     private enum class ReelEnd {
@@ -468,9 +518,10 @@ object MacroRunner {
         capture: ScreenCaptureService,
         accessibility: MacroAccessibilityService,
         initial: ReelObservation,
+        initialFrameWidth: Int,
+        initialFrameHeight: Int,
+        initialRotation: Int,
         specialRod: String,
-        touchX: Float,
-        touchY: Float,
         timeoutMs: Long,
         stopFlag: AtomicBoolean,
         onStatus: (String) -> Unit
@@ -491,12 +542,47 @@ object MacroRunner {
         var noFishSince = 0L
         var lastStatusAt = 0L
 
+        var lastFrameWidth = initialFrameWidth
+        var lastFrameHeight = initialFrameHeight
+        var lastFrameRotation = initialRotation
+
         while (
             !stopFlag.get() &&
             SystemClock.elapsedRealtime() - started < timeoutMs
         ) {
             val frame = freshFrame(capture, stopFlag)
             if (stopFlag.get()) return ReelEnd.TIMEOUT
+
+            val currentRotation = capture.displayRotation()
+
+            // После поворота не используем старую скорость,
+            // положение рыбы и накопленную длительность удержания.
+            if (
+                frame.width != lastFrameWidth ||
+                frame.height != lastFrameHeight ||
+                currentRotation != lastFrameRotation
+            ) {
+                lastFrameWidth = frame.width
+                lastFrameHeight = frame.height
+                lastFrameRotation = currentRotation
+
+                lastFishX = null
+                lastBarCenter = null
+
+                fishVelocity = 0f
+                barVelocity = 0f
+                holdAccumulator = 0f
+
+                missingBarFrames = 0
+                noFishSince = 0L
+
+                lastSampleAt =
+                    SystemClock.elapsedRealtime()
+
+                onStatus(
+                    "ЭКРАН ОБНОВЛЁН · ${frame.width}×${frame.height} · продолжаю мини-игру"
+                )
+            }
 
             if (frame.sequence == lastSequence) {
                 Thread.sleep(LOOP_SLEEP_MS)
@@ -556,18 +642,23 @@ object MacroRunner {
                 if (holdAccumulator >= 1f) {
                     holdAccumulator -= 1f
 
-                    val ok = accessibility.pressAndHold(
-                        x = touchX,
-                        y = touchY,
-                        durationMs = CONTROL_PULSE_MS,
+                    val result = sendReelControlPulse(
+                        capture = capture,
+                        accessibility = accessibility,
+                        frame = frame,
                         stopFlag = stopFlag
                     )
 
-                    if (!ok && !stopFlag.get()) {
+                    if (result == false && !stopFlag.get()) {
                         throw IllegalStateException(
                             "Не удалось отправить касание управления мини-игрой"
                         )
                     }
+
+                    if (result == null) {
+                        holdAccumulator = 0f
+                    }
+
                 } else {
                     Thread.sleep(CONTROL_PULSE_MS)
                 }
@@ -625,18 +716,23 @@ object MacroRunner {
             if (holdNow) holdAccumulator -= 1f
 
             if (holdNow) {
-                val ok = accessibility.pressAndHold(
-                    x = touchX,
-                    y = touchY,
-                    durationMs = CONTROL_PULSE_MS,
+                val result = sendReelControlPulse(
+                    capture = capture,
+                    accessibility = accessibility,
+                    frame = frame,
                     stopFlag = stopFlag
                 )
 
-                if (!ok && !stopFlag.get()) {
+                if (result == false && !stopFlag.get()) {
                     throw IllegalStateException(
                         "Не удалось отправить касание управления мини-игрой"
                     )
                 }
+
+                if (result == null) {
+                    holdAccumulator = 0f
+                }
+
             } else {
                 Thread.sleep(CONTROL_PULSE_MS)
             }
@@ -667,6 +763,41 @@ object MacroRunner {
         }
 
         return ReelEnd.TIMEOUT
+    }
+
+    /**
+     * Отправляет удержание в центре актуального кадра.
+     *
+     * null означает, что во время подготовки жеста экран уже изменился.
+     * В таком случае пропускаем нажатие и ждём новый кадр.
+     */
+    private fun sendReelControlPulse(
+        capture: ScreenCaptureService,
+        accessibility: MacroAccessibilityService,
+        frame: CapturedFrame,
+        stopFlag: AtomicBoolean
+    ): Boolean? {
+        val geometryStillCurrent =
+            capture.isCaptureReady(FRAME_MAX_AGE_MS) &&
+                capture.frameWidth() == frame.width &&
+                capture.frameHeight() == frame.height
+
+        if (!geometryStillCurrent) {
+            return null
+        }
+
+        val x = (frame.width / 2f)
+            .coerceIn(2f, (frame.width - 3).toFloat())
+
+        val y = (frame.height / 2f)
+            .coerceIn(2f, (frame.height - 3).toFloat())
+
+        return accessibility.pressAndHold(
+            x = x,
+            y = y,
+            durationMs = CONTROL_PULSE_MS,
+            stopFlag = stopFlag
+        )
     }
 
     private fun freshFrame(
