@@ -23,6 +23,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.DisplayMetrics
 import android.util.Log
+import android.view.Display
 import android.view.WindowManager
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
@@ -43,10 +44,7 @@ class ScreenCaptureService : Service() {
         private const val NOTIFICATION_ID = 4102
         private const val TAG = "WSFischCapture"
 
-        // Не обрабатываем каждый системный кадр.
         private const val MIN_FRAME_INTERVAL_MS = 120L
-
-        // Защита от слишком больших изображений.
         private const val MAX_CAPTURE_PIXELS = 12_000_000L
 
         @Volatile
@@ -61,8 +59,6 @@ class ScreenCaptureService : Service() {
 
     private val sequence = AtomicLong(0L)
 
-    // Все операции запуска и остановки выполняются
-    // последовательно в главном потоке сервиса.
     private var startInProgress = false
 
     @Volatile
@@ -75,16 +71,38 @@ class ScreenCaptureService : Service() {
     private var captureHeight = 0
 
     @Volatile
+    private var captureDensityDpi = 0
+
+    @Volatile
+    private var captureRotation = -1
+
+    @Volatile
     private var lastFrameAt = 0L
 
     private var projection: MediaProjection? = null
     private var projectionCallback: MediaProjection.Callback? = null
 
     private var virtualDisplay: VirtualDisplay? = null
+
+    @Volatile
     private var imageReader: ImageReader? = null
 
     private var captureThread: HandlerThread? = null
     private var captureHandler: Handler? = null
+
+    private var displayManager: DisplayManager? = null
+    private var displayListener: DisplayManager.DisplayListener? = null
+
+    private val refreshDisplayRunnable = Runnable {
+        refreshCaptureTarget()
+    }
+
+    private data class DisplaySnapshot(
+        val width: Int,
+        val height: Int,
+        val densityDpi: Int,
+        val rotation: Int
+    )
 
     override fun onCreate() {
         super.onCreate()
@@ -104,8 +122,6 @@ class ScreenCaptureService : Service() {
         when (intent?.action) {
 
             ACTION_START -> {
-                // Повторный запуск не должен создавать
-                // второй MediaProjection.
                 if (captureStarted || startInProgress) {
                     Log.w(TAG, "Захват уже запущен или запускается")
                     return START_NOT_STICKY
@@ -213,6 +229,25 @@ class ScreenCaptureService : Service() {
         Log.i(TAG, "Foreground service запущен")
     }
 
+    @Suppress("DEPRECATION")
+    private fun readDisplaySnapshot(): DisplaySnapshot {
+        val windowManager = getSystemService(
+            Context.WINDOW_SERVICE
+        ) as WindowManager
+
+        val display = windowManager.defaultDisplay
+        val metrics = DisplayMetrics()
+
+        display.getRealMetrics(metrics)
+
+        return DisplaySnapshot(
+            width = metrics.widthPixels,
+            height = metrics.heightPixels,
+            densityDpi = metrics.densityDpi,
+            rotation = display.rotation
+        )
+    }
+
     private fun startCapture(
         resultCode: Int,
         data: Intent
@@ -226,7 +261,6 @@ class ScreenCaptureService : Service() {
             Context.MEDIA_PROJECTION_SERVICE
         ) as MediaProjectionManager
 
-        // Каждый запуск использует новый результат согласия.
         val newProjection = manager.getMediaProjection(
             resultCode,
             data
@@ -236,44 +270,24 @@ class ScreenCaptureService : Service() {
 
         projection = newProjection
 
-        // Получаем реальные размеры дисплея.
-        val metrics = DisplayMetrics()
+        val displayInfo = readDisplaySnapshot()
 
-        @Suppress("DEPRECATION")
-        val windowManager = getSystemService(
-            Context.WINDOW_SERVICE
-        ) as WindowManager
+        val width = displayInfo.width
+        val height = displayInfo.height
+        val densityDpi = displayInfo.densityDpi
 
-        @Suppress("DEPRECATION")
-        windowManager.defaultDisplay.getRealMetrics(metrics)
-
-        val width = metrics.widthPixels
-        val height = metrics.heightPixels
-        val densityDpi = metrics.densityDpi
-
-        if (width <= 0 || height <= 0 || densityDpi <= 0) {
-            throw IllegalStateException(
-                "Android вернул некорректный размер экрана"
-            )
-        }
-
-        val pixelCount = width.toLong() * height.toLong()
-
-        if (pixelCount > MAX_CAPTURE_PIXELS) {
-            throw IllegalStateException(
-                "Разрешение экрана слишком большое: ${width}x${height}"
-            )
-        }
+        validateCaptureSize(width, height, densityDpi)
 
         captureWidth = width
         captureHeight = height
+        captureDensityDpi = densityDpi
+        captureRotation = displayInfo.rotation
 
         Log.i(
             TAG,
-            "Размер экрана: ${width}x${height}"
+            "Размер экрана: ${width}x${height}, rotation=${displayInfo.rotation}"
         )
 
-        // Отдельный поток для получения кадров.
         val thread = HandlerThread(
             "WSFischScreenCapture"
         )
@@ -283,25 +297,13 @@ class ScreenCaptureService : Service() {
         captureThread = thread
         captureHandler = Handler(thread.looper)
 
-        // ImageReader хранит максимум два необработанных кадра.
-        val reader = ImageReader.newInstance(
+        val reader = createImageReader(
             width,
-            height,
-            PixelFormat.RGBA_8888,
-            2
+            height
         )
 
         imageReader = reader
 
-        reader.setOnImageAvailableListener(
-            { source ->
-                processAvailableImage(source)
-            },
-            captureHandler
-        )
-
-        // Android 14+ требует callback до createVirtualDisplay().
-        // Callback привязан к конкретному экземпляру projection.
         val callback = object : MediaProjection.Callback() {
 
             override fun onStop() {
@@ -323,8 +325,8 @@ class ScreenCaptureService : Service() {
             mainHandler
         )
 
-        // Для одного разрешения пользователя создаём
-        // только один VirtualDisplay.
+        // На одну сессию MediaProjection создаём только один VirtualDisplay.
+        // При повороте используем resize() и setSurface().
         val display = newProjection.createVirtualDisplay(
             "WSFischCapture",
             width,
@@ -341,9 +343,250 @@ class ScreenCaptureService : Service() {
         virtualDisplay = display
         captureStarted = true
 
+        registerDisplayListener()
+
         Log.i(
             TAG,
             "Захват запущен: ${width}x${height}"
+        )
+    }
+
+    private fun validateCaptureSize(
+        width: Int,
+        height: Int,
+        densityDpi: Int
+    ) {
+        if (width <= 0 || height <= 0 || densityDpi <= 0) {
+            throw IllegalStateException(
+                "Android вернул некорректный размер экрана"
+            )
+        }
+
+        val pixelCount = width.toLong() * height.toLong()
+
+        if (pixelCount > MAX_CAPTURE_PIXELS) {
+            throw IllegalStateException(
+                "Разрешение экрана слишком большое: ${width}x${height}"
+            )
+        }
+    }
+
+    private fun createImageReader(
+        width: Int,
+        height: Int
+    ): ImageReader {
+        val reader = ImageReader.newInstance(
+            width,
+            height,
+            PixelFormat.RGBA_8888,
+            2
+        )
+
+        val handler = captureHandler
+            ?: throw IllegalStateException(
+                "Поток захвата не запущен"
+            )
+
+        reader.setOnImageAvailableListener(
+            { source ->
+                processAvailableImage(source)
+            },
+            handler
+        )
+
+        return reader
+    }
+
+    private fun registerDisplayListener() {
+        try {
+            val manager = getSystemService(
+                Context.DISPLAY_SERVICE
+            ) as DisplayManager
+
+            val listener = object : DisplayManager.DisplayListener {
+
+                override fun onDisplayAdded(displayId: Int) = Unit
+
+                override fun onDisplayRemoved(displayId: Int) = Unit
+
+                override fun onDisplayChanged(displayId: Int) {
+                    if (displayId != Display.DEFAULT_DISPLAY) {
+                        return
+                    }
+
+                    // Даём Android закончить смену геометрии экрана.
+                    mainHandler.removeCallbacks(
+                        refreshDisplayRunnable
+                    )
+
+                    mainHandler.postDelayed(
+                        refreshDisplayRunnable,
+                        120L
+                    )
+                }
+            }
+
+            manager.registerDisplayListener(
+                listener,
+                mainHandler
+            )
+
+            displayManager = manager
+            displayListener = listener
+
+            Log.i(TAG, "Отслеживание поворота экрана включено")
+
+        } catch (e: Exception) {
+            Log.e(
+                TAG,
+                "Не удалось включить отслеживание поворота",
+                e
+            )
+        }
+    }
+
+    /**
+     * Вызывается при изменении ориентации или размеров дисплея.
+     *
+     * MediaProjection и VirtualDisplay не пересоздаются:
+     * меняются только размеры VirtualDisplay и поверхность ImageReader.
+     */
+    private fun refreshCaptureTarget() {
+        if (!captureStarted) return
+
+        val display = virtualDisplay ?: return
+        val oldReader = imageReader ?: return
+
+        val newInfo = try {
+            readDisplaySnapshot()
+        } catch (e: Exception) {
+            Log.e(TAG, "Не удалось прочитать размеры дисплея", e)
+            return
+        }
+
+        val width = newInfo.width
+        val height = newInfo.height
+        val densityDpi = newInfo.densityDpi
+        val rotation = newInfo.rotation
+
+        try {
+            validateCaptureSize(
+                width,
+                height,
+                densityDpi
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Новые размеры экрана некорректны", e)
+            return
+        }
+
+        val changed =
+            width != captureWidth ||
+                height != captureHeight ||
+                densityDpi != captureDensityDpi ||
+                rotation != captureRotation
+
+        if (!changed) return
+
+        val handler = captureHandler ?: return
+
+        val newReader = try {
+            ImageReader.newInstance(
+                width,
+                height,
+                PixelFormat.RGBA_8888,
+                2
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Не удалось создать новый ImageReader", e)
+            return
+        }
+
+        newReader.setOnImageAvailableListener(
+            { source ->
+                processAvailableImage(source)
+            },
+            handler
+        )
+
+        val oldWidth = captureWidth
+        val oldHeight = captureHeight
+        val oldDensityDpi = captureDensityDpi
+        val oldRotation = captureRotation
+
+        // С этого момента старые кадры больше не принимаются.
+        imageReader = newReader
+
+        captureWidth = width
+        captureHeight = height
+        captureDensityDpi = densityDpi
+        captureRotation = rotation
+
+        latestFrame.set(null)
+        lastFrameAt = 0L
+
+        try {
+            display.resize(
+                width,
+                height,
+                densityDpi
+            )
+
+            display.setSurface(newReader.surface)
+
+        } catch (e: Exception) {
+            Log.e(
+                TAG,
+                "Не удалось изменить размер VirtualDisplay",
+                e
+            )
+
+            // Возвращаем старую поверхность и размеры.
+            imageReader = oldReader
+
+            captureWidth = oldWidth
+            captureHeight = oldHeight
+            captureDensityDpi = oldDensityDpi
+            captureRotation = oldRotation
+
+            try {
+                display.resize(
+                    oldWidth,
+                    oldHeight,
+                    oldDensityDpi
+                )
+
+                display.setSurface(oldReader.surface)
+
+            } catch (restoreError: Exception) {
+                Log.e(
+                    TAG,
+                    "Не удалось восстановить прежний размер захвата",
+                    restoreError
+                )
+            }
+
+            try {
+                newReader.setOnImageAvailableListener(null, null)
+                newReader.close()
+            } catch (closeError: Exception) {
+                Log.w(TAG, "Ошибка закрытия нового ImageReader", closeError)
+            }
+
+            return
+        }
+
+        // Новая поверхность уже подключена — старую можно закрывать.
+        try {
+            oldReader.setOnImageAvailableListener(null, null)
+            oldReader.close()
+        } catch (e: Exception) {
+            Log.w(TAG, "Ошибка закрытия старого ImageReader", e)
+        }
+
+        Log.i(
+            TAG,
+            "Экран обновлён: ${width}x${height}, rotation=$rotation"
         )
     }
 
@@ -358,9 +601,14 @@ class ScreenCaptureService : Service() {
         } ?: return
 
         try {
+            // Очередь старого ImageReader нужно очищать,
+            // но его кадры уже нельзя передавать макросу.
+            if (source !== imageReader) {
+                return
+            }
+
             val now = SystemClock.elapsedRealtime()
 
-            // Пропускаем лишние кадры, но всегда закрываем Image.
             if (
                 now - lastFrameAt <
                 MIN_FRAME_INTERVAL_MS
@@ -402,6 +650,14 @@ class ScreenCaptureService : Service() {
         val height = image.height
 
         if (width <= 0 || height <= 0) return
+
+        // Отбрасываем кадры, не соответствующие текущей геометрии.
+        if (
+            width != captureWidth ||
+            height != captureHeight
+        ) {
+            return
+        }
 
         val pixelCountLong =
             width.toLong() * height.toLong()
@@ -446,8 +702,6 @@ class ScreenCaptureService : Service() {
             return
         }
 
-        // Копируем строки напрямую в итоговый массив.
-        // Дополнительный большой промежуточный массив не создаётся.
         var y = 0
 
         while (y < height) {
@@ -474,16 +728,12 @@ class ScreenCaptureService : Service() {
                 SystemClock.elapsedRealtime()
         )
 
-        captureWidth = width
-        captureHeight = height
-
         latestFrame.set(frame)
     }
 
     private fun handleProjectionStopped(
         stoppedProjection: MediaProjection
     ) {
-        // Защита от запоздавшего callback старого сеанса.
         if (projection !== stoppedProjection) {
             return
         }
@@ -531,6 +781,10 @@ class ScreenCaptureService : Service() {
 
     fun frameHeight(): Int {
         return latestFrame.get()?.height ?: captureHeight
+    }
+
+    fun displayRotation(): Int {
+        return captureRotation
     }
 
     fun frameAgeMs(): Long {
@@ -607,9 +861,11 @@ class ScreenCaptureService : Service() {
     private fun releaseCapture(
         stopProjection: Boolean
     ) {
-        // Сначала отсоединяем ресурсы от сервиса.
-        // Повторный вызов этой функции безопасен.
         captureStarted = false
+
+        mainHandler.removeCallbacks(
+            refreshDisplayRunnable
+        )
 
         latestFrame.set(null)
         lastFrameAt = 0L
@@ -619,6 +875,8 @@ class ScreenCaptureService : Service() {
         val oldDisplay = virtualDisplay
         val oldReader = imageReader
         val oldThread = captureThread
+        val oldDisplayManager = displayManager
+        val oldDisplayListener = displayListener
 
         projection = null
         projectionCallback = null
@@ -629,7 +887,24 @@ class ScreenCaptureService : Service() {
         captureThread = null
         captureHandler = null
 
-        // Снимаем listener перед закрытием ImageReader.
+        displayManager = null
+        displayListener = null
+
+        captureWidth = 0
+        captureHeight = 0
+        captureDensityDpi = 0
+        captureRotation = -1
+
+        try {
+            if (oldDisplayManager != null && oldDisplayListener != null) {
+                oldDisplayManager.unregisterDisplayListener(
+                    oldDisplayListener
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Ошибка отключения DisplayListener", e)
+        }
+
         try {
             oldReader?.setOnImageAvailableListener(
                 null,
@@ -639,14 +914,12 @@ class ScreenCaptureService : Service() {
             Log.w(TAG, "Ошибка отключения listener", e)
         }
 
-        // Освобождаем виртуальный дисплей.
         try {
             oldDisplay?.release()
         } catch (e: Exception) {
             Log.w(TAG, "Ошибка освобождения VirtualDisplay", e)
         }
 
-        // Закрываем ImageReader.
         try {
             oldReader?.close()
         } catch (e: Exception) {
@@ -654,8 +927,6 @@ class ScreenCaptureService : Service() {
         }
 
         if (stopProjection && oldProjection != null) {
-            // Сначала убираем callback, чтобы stop()
-            // не вызвал повторную очистку ресурсов.
             try {
                 if (oldCallback != null) {
                     oldProjection.unregisterCallback(oldCallback)
@@ -671,7 +942,6 @@ class ScreenCaptureService : Service() {
             }
         }
 
-        // Останавливаем поток после отключения ImageReader.
         try {
             oldThread?.quitSafely()
         } catch (e: Exception) {
