@@ -10,8 +10,10 @@ object MacroRunner {
 
     private const val PREFS = "mobile_macro_rod_settings"
     private const val FRAME_MAX_AGE_MS = 1_200L
-    private const val LOOP_SLEEP_MS = 35L
+    private const val LOOP_SLEEP_MS = 25L
     private const val CONTROL_PULSE_MS = 55L
+
+    private const val REEL_MISSING_FRAMES_TO_FINISH = 10
 
     data class Config(
         val castXPercent: Int,
@@ -98,7 +100,11 @@ object MacroRunner {
             }
 
             val config = readConfig(context)
-            val firstFrame = freshFrame(capture, stopFlag)
+
+            val firstFrame = freshFrame(
+                capture,
+                stopFlag
+            )
 
             onStatus(
                 "ГОТОВО: ${firstFrame.width}×${firstFrame.height} · ${config.specialRod}"
@@ -110,7 +116,11 @@ object MacroRunner {
             while (!stopFlag.get()) {
                 cycle++
 
-                val beforeCast = freshFrame(capture, stopFlag)
+                val beforeCast = freshFrame(
+                    capture,
+                    stopFlag
+                )
+
                 if (stopFlag.get()) return
 
                 val x = (
@@ -138,7 +148,7 @@ object MacroRunner {
 
                 if (!castDispatched) {
                     throw IllegalStateException(
-                        "Android не завершил жест заброса. Проверь службу касаний и повтори тест"
+                        "Android не завершил жест заброса. Проверь службу касаний"
                     )
                 }
 
@@ -170,7 +180,7 @@ object MacroRunner {
                 }
 
                 onStatus(
-                    "МИНИ-ИГРА · полоса подтверждена, веду рыбу"
+                    "МИНИ-ИГРА · начинаю управление полосой"
                 )
 
                 val reelResult = playReel(
@@ -188,24 +198,34 @@ object MacroRunner {
 
                 if (stopFlag.get()) return
 
-                onStatus(
-                    if (reelResult == ReelEnd.BAR_DISAPPEARED) {
-                        "МИНИ-ИГРА ЗАВЕРШЕНА · цикл $cycle · SHAKE $totalShakeClicks"
-                    } else {
-                        "ТАЙМ-АУТ МИНИ-ИГРЫ · перезапуск цикла $cycle"
+                when (reelResult) {
+                    ReelEnd.BAR_DISAPPEARED -> {
+                        onStatus(
+                            "ПОЛОСА ИСЧЕЗЛА · завершаю цикл #$cycle"
+                        )
                     }
-                )
+
+                    ReelEnd.TIMEOUT -> {
+                        onStatus(
+                            "ТАЙМ-АУТ МИНИ-ИГРЫ · перезапуск цикла #$cycle"
+                        )
+                    }
+                }
 
                 sleepCancellable(
                     config.recastDelayMs,
                     stopFlag
                 )
             }
+
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
             onStatus("ОСТАНОВЛЕНО")
+
         } catch (e: Exception) {
-            onStatus("ОШИБКА: ${e.message ?: "неизвестная ошибка"}")
+            onStatus(
+                "ОШИБКА: ${e.message ?: "неизвестная ошибка"}"
+            )
         }
     }
 
@@ -251,12 +271,15 @@ object MacroRunner {
             SystemClock.elapsedRealtime() - started <
             config.shakeTimeoutMs
         ) {
-            val frame = freshFrame(capture, stopFlag)
+            val frame = freshFrame(
+                capture,
+                stopFlag
+            )
+
             if (stopFlag.get()) break
 
             val currentRotation = capture.displayRotation()
 
-            // Поворот экрана: старые координаты и кандидаты больше не годятся.
             if (
                 frame.width != lastFrameWidth ||
                 frame.height != lastFrameHeight ||
@@ -293,7 +316,6 @@ object MacroRunner {
             val elapsed =
                 SystemClock.elapsedRealtime() - started
 
-            // Сначала всегда проверяем мини-игру.
             val reel = FischVision.detectReel(
                 frame,
                 config.specialRod,
@@ -430,8 +452,6 @@ object MacroRunner {
                             (movedToNewPrompt || canRetrySame) &&
                             (confident || stable)
                         ) {
-                            // Не нажимаем по координатам старого кадра,
-                            // если Android уже сменил геометрию дисплея.
                             val geometryStillCurrent =
                                 capture.isCaptureReady(FRAME_MAX_AGE_MS) &&
                                     capture.frameWidth() == frame.width &&
@@ -530,6 +550,7 @@ object MacroRunner {
             SystemClock.elapsedRealtime()
 
         var lastSequence = -1L
+
         var lastFishX: Int? = initial.fishX
         var lastBarCenter: Float? = initial.barCenter
         var lastSampleAt = started
@@ -546,17 +567,25 @@ object MacroRunner {
         var lastFrameHeight = initialFrameHeight
         var lastFrameRotation = initialRotation
 
+        // Геометрия исходной полосы.
+        // Не даём случайной белой полоске на экране
+        // выдаваться за продолжающуюся мини-игру.
+        var referenceObservation: ReelObservation? = initial
+        var baselineCandidate: ReelObservation? = null
+
         while (
             !stopFlag.get() &&
             SystemClock.elapsedRealtime() - started < timeoutMs
         ) {
-            val frame = freshFrame(capture, stopFlag)
+            val frame = freshFrame(
+                capture,
+                stopFlag
+            )
+
             if (stopFlag.get()) return ReelEnd.TIMEOUT
 
             val currentRotation = capture.displayRotation()
 
-            // После поворота не используем старую скорость,
-            // положение рыбы и накопленную длительность удержания.
             if (
                 frame.width != lastFrameWidth ||
                 frame.height != lastFrameHeight ||
@@ -579,6 +608,10 @@ object MacroRunner {
                 lastSampleAt =
                     SystemClock.elapsedRealtime()
 
+                // После поворота ищем игровую полосу заново.
+                referenceObservation = null
+                baselineCandidate = null
+
                 onStatus(
                     "ЭКРАН ОБНОВЛЁН · ${frame.width}×${frame.height} · продолжаю мини-игру"
                 )
@@ -591,25 +624,85 @@ object MacroRunner {
 
             lastSequence = frame.sequence
 
-            val observation = FischVision.detectReel(
+            val detected = FischVision.detectReel(
                 frame,
                 specialRod,
                 lastFishX
             )
 
-            if (observation == null) {
+            if (detected == null) {
                 missingBarFrames++
 
-                if (missingBarFrames >= 12) {
+                if (
+                    missingBarFrames >=
+                    REEL_MISSING_FRAMES_TO_FINISH
+                ) {
                     return ReelEnd.BAR_DISAPPEARED
                 }
 
-                Thread.sleep(45L)
+                Thread.sleep(LOOP_SLEEP_MS)
+                continue
+            }
+
+            // Если после поворота нет контрольной геометрии,
+            // подтверждаем новую полосу двумя последовательными кадрами.
+            val reference = referenceObservation
+
+            if (reference == null) {
+                val previousCandidate = baselineCandidate
+
+                if (
+                    previousCandidate != null &&
+                    isSameReelOverlay(
+                        previousCandidate,
+                        detected,
+                        frame
+                    )
+                ) {
+                    referenceObservation = detected
+                    baselineCandidate = null
+                    missingBarFrames = 0
+
+                    lastBarCenter = detected.barCenter
+                    lastSampleAt =
+                        SystemClock.elapsedRealtime()
+
+                    Thread.sleep(LOOP_SLEEP_MS)
+                    continue
+                }
+
+                baselineCandidate = detected
+                missingBarFrames = 0
+
+                Thread.sleep(LOOP_SLEEP_MS)
+                continue
+            }
+
+            // Проверяем, что это та же самая игровая полоса,
+            // а не другой белый элемент интерфейса.
+            if (
+                !isSameReelOverlay(
+                    reference,
+                    detected,
+                    frame
+                )
+            ) {
+                missingBarFrames++
+
+                if (
+                    missingBarFrames >=
+                    REEL_MISSING_FRAMES_TO_FINISH
+                ) {
+                    return ReelEnd.BAR_DISAPPEARED
+                }
+
+                Thread.sleep(LOOP_SLEEP_MS)
                 continue
             }
 
             missingBarFrames = 0
 
+            val observation = detected
             val fishX = observation.fishX
             val now = SystemClock.elapsedRealtime()
 
@@ -637,6 +730,8 @@ object MacroRunner {
                     lastStatusAt = now
                 }
 
+                // Если маркер рыбы временно не найден,
+                // поддерживаем приблизительный баланс управления.
                 holdAccumulator += 0.46f
 
                 if (holdAccumulator >= 1f) {
@@ -646,6 +741,7 @@ object MacroRunner {
                         capture = capture,
                         accessibility = accessibility,
                         frame = frame,
+                        expectedRotation = currentRotation,
                         stopFlag = stopFlag
                     )
 
@@ -690,6 +786,8 @@ object MacroRunner {
                     0.45f * barVelocity
             }
 
+            // Положительная ошибка означает, что рыба правее полосы:
+            // нужно дольше удерживать палец.
             val error =
                 fishX - currentBarCenter
 
@@ -704,6 +802,9 @@ object MacroRunner {
                 relativeVelocity / (observation.trackWidth * 1.5f)
             ).coerceIn(-1f, 1f)
 
+            // Чем правее рыба относительно полосы,
+            // тем чаще нажимаем и удерживаем.
+            // Чем левее — тем чаще отпускаем.
             val duty = (
                 0.46f +
                     0.34f * normalizedPosition +
@@ -713,13 +814,15 @@ object MacroRunner {
             holdAccumulator += duty
 
             val holdNow = holdAccumulator >= 1f
-            if (holdNow) holdAccumulator -= 1f
 
             if (holdNow) {
+                holdAccumulator -= 1f
+
                 val result = sendReelControlPulse(
                     capture = capture,
                     accessibility = accessibility,
                     frame = frame,
+                    expectedRotation = currentRotation,
                     stopFlag = stopFlag
                 )
 
@@ -730,10 +833,12 @@ object MacroRunner {
                 }
 
                 if (result == null) {
+                    // Геометрия экрана изменилась прямо перед касанием.
                     holdAccumulator = 0f
                 }
 
             } else {
+                // Палец отпущен — полоса Fisch должна двигаться влево.
                 Thread.sleep(CONTROL_PULSE_MS)
             }
 
@@ -766,21 +871,67 @@ object MacroRunner {
     }
 
     /**
-     * Отправляет удержание в центре актуального кадра.
+     * Проверяет, что обнаружена та же полоса мини-игры.
+     */
+    private fun isSameReelOverlay(
+        reference: ReelObservation,
+        candidate: ReelObservation,
+        frame: CapturedFrame
+    ): Boolean {
+        val yTolerance =
+            max(50, (frame.height * 0.045f).toInt())
+
+        val centerTolerance =
+            max(45, (frame.width * 0.09f).toInt())
+
+        val trackWidthTolerance =
+            max(60, (reference.trackWidth * 0.60f).toInt())
+
+        val barWidthTolerance =
+            max(35, (reference.barWidth * 0.70f).toInt())
+
+        val referenceTrackCenter =
+            (reference.trackLeft + reference.trackRight) / 2
+
+        val candidateTrackCenter =
+            (candidate.trackLeft + candidate.trackRight) / 2
+
+        return abs(
+            candidate.centerY - reference.centerY
+        ) <= yTolerance &&
+
+            abs(
+                candidateTrackCenter - referenceTrackCenter
+            ) <= centerTolerance &&
+
+            abs(
+                candidate.trackWidth - reference.trackWidth
+            ) <= trackWidthTolerance &&
+
+            abs(
+                candidate.barWidth - reference.barWidth
+            ) <= barWidthTolerance &&
+
+            candidate.confidence >= 0.38f
+    }
+
+    /**
+     * Отправляет короткое удержание по центру актуального кадра.
      *
-     * null означает, что во время подготовки жеста экран уже изменился.
-     * В таком случае пропускаем нажатие и ждём новый кадр.
+     * null означает, что экран изменился прямо перед касанием.
      */
     private fun sendReelControlPulse(
         capture: ScreenCaptureService,
         accessibility: MacroAccessibilityService,
         frame: CapturedFrame,
+        expectedRotation: Int,
         stopFlag: AtomicBoolean
     ): Boolean? {
         val geometryStillCurrent =
             capture.isCaptureReady(FRAME_MAX_AGE_MS) &&
                 capture.frameWidth() == frame.width &&
-                capture.frameHeight() == frame.height
+                capture.frameHeight() == frame.height &&
+                capture.displayRotation() == expectedRotation
 
         if (!geometryStillCurrent) {
             return null
