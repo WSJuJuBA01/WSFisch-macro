@@ -7,6 +7,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -18,9 +19,11 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
+import android.os.Looper
 import android.os.SystemClock
-import android.content.pm.ServiceInfo
+import android.util.DisplayMetrics
 import android.util.Log
+import android.view.WindowManager
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
@@ -40,31 +43,30 @@ class ScreenCaptureService : Service() {
         private const val NOTIFICATION_ID = 4102
         private const val TAG = "WSFischCapture"
 
+        // Не обрабатываем каждый системный кадр.
+        private const val MIN_FRAME_INTERVAL_MS = 120L
+
+        // Защита от слишком больших изображений.
+        private const val MAX_CAPTURE_PIXELS = 12_000_000L
+
         @Volatile
         var instance: ScreenCaptureService? = null
             private set
     }
 
-    private val captureLock = Any()
-
-    @Volatile
-    private var projection: MediaProjection? = null
-
-    @Volatile
-    private var virtualDisplay: VirtualDisplay? = null
-
-    @Volatile
-    private var imageReader: ImageReader? = null
-
-    private var handlerThread: HandlerThread? = null
-    private var captureHandler: Handler? = null
-
-    private val mainHandler = Handler(mainLooper)
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private val latestFrame =
         AtomicReference<CapturedFrame?>(null)
 
     private val sequence = AtomicLong(0L)
+
+    // Все операции запуска и остановки выполняются
+    // последовательно в главном потоке сервиса.
+    private var startInProgress = false
+
+    @Volatile
+    private var captureStarted = false
 
     @Volatile
     private var captureWidth = 0
@@ -73,27 +75,24 @@ class ScreenCaptureService : Service() {
     private var captureHeight = 0
 
     @Volatile
-    private var captureStarted = false
+    private var lastFrameAt = 0L
 
-    private val projectionCallback =
-        object : MediaProjection.Callback() {
+    private var projection: MediaProjection? = null
+    private var projectionCallback: MediaProjection.Callback? = null
 
-            override fun onStop() {
-                Log.i(TAG, "MediaProjection остановлена системой")
+    private var virtualDisplay: VirtualDisplay? = null
+    private var imageReader: ImageReader? = null
 
-                releaseCapture(stopProjection = false)
-
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-            }
-        }
+    private var captureThread: HandlerThread? = null
+    private var captureHandler: Handler? = null
 
     override fun onCreate() {
         super.onCreate()
 
         createNotificationChannel()
-
         instance = this
+
+        Log.i(TAG, "Сервис создан")
     }
 
     override fun onStartCommand(
@@ -105,38 +104,56 @@ class ScreenCaptureService : Service() {
         when (intent?.action) {
 
             ACTION_START -> {
-                val resultCode = intent.getIntExtra(
-                    EXTRA_RESULT_CODE,
-                    0
-                )
-
-                @Suppress("DEPRECATION")
-                val data = if (Build.VERSION.SDK_INT >= 33) {
-                    intent.getParcelableExtra(
-                        EXTRA_RESULT_DATA,
-                        Intent::class.java
-                    )
-                } else {
-                    intent.getParcelableExtra(EXTRA_RESULT_DATA)
+                // Повторный запуск не должен создавать
+                // второй MediaProjection.
+                if (captureStarted || startInProgress) {
+                    Log.w(TAG, "Захват уже запущен или запускается")
+                    return START_NOT_STICKY
                 }
 
-                if (resultCode != Activity.RESULT_OK || data == null) {
+                val resultCode = intent.getIntExtra(
+                    EXTRA_RESULT_CODE,
+                    Activity.RESULT_CANCELED
+                )
+
+                val data = getProjectionIntent(intent)
+
+                if (
+                    resultCode != Activity.RESULT_OK ||
+                    data == null
+                ) {
                     Log.e(TAG, "Нет разрешения на захват экрана")
                     stopSelf(startId)
                     return START_NOT_STICKY
                 }
 
+                startInProgress = true
+
                 try {
                     startCaptureForeground()
                     startCapture(resultCode, data)
+
+                    Log.i(TAG, "Запуск захвата завершён")
 
                 } catch (e: Exception) {
                     Log.e(TAG, "Ошибка запуска захвата", e)
 
                     releaseCapture(stopProjection = true)
 
-                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    try {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                    } catch (stopError: Exception) {
+                        Log.w(
+                            TAG,
+                            "Не удалось убрать уведомление",
+                            stopError
+                        )
+                    }
+
                     stopSelf(startId)
+
+                } finally {
+                    startInProgress = false
                 }
             }
 
@@ -145,16 +162,36 @@ class ScreenCaptureService : Service() {
 
                 releaseCapture(stopProjection = true)
 
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                try {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Ошибка остановки foreground", e)
+                }
+
                 stopSelf(startId)
             }
 
             else -> {
+                Log.w(TAG, "Неизвестное действие сервиса")
                 stopSelf(startId)
             }
         }
 
         return START_NOT_STICKY
+    }
+
+    @Suppress("DEPRECATION")
+    private fun getProjectionIntent(
+        intent: Intent
+    ): Intent? {
+        return if (Build.VERSION.SDK_INT >= 33) {
+            intent.getParcelableExtra(
+                EXTRA_RESULT_DATA,
+                Intent::class.java
+            )
+        } else {
+            intent.getParcelableExtra(EXTRA_RESULT_DATA)
+        }
     }
 
     private fun startCaptureForeground() {
@@ -172,57 +209,84 @@ class ScreenCaptureService : Service() {
                 notification
             )
         }
+
+        Log.i(TAG, "Foreground service запущен")
     }
 
     private fun startCapture(
         resultCode: Int,
         data: Intent
     ) {
-        synchronized(captureLock) {
-            if (captureStarted || projection != null) {
-                Log.w(TAG, "Захват уже запущен")
-                return
-            }
+        if (projection != null || captureStarted) {
+            Log.w(TAG, "Попытка повторного запуска отклонена")
+            return
         }
 
         val manager = getSystemService(
             Context.MEDIA_PROJECTION_SERVICE
         ) as MediaProjectionManager
 
+        // Каждый запуск использует новый результат согласия.
         val newProjection = manager.getMediaProjection(
             resultCode,
             data
         ) ?: throw IllegalStateException(
-            "MediaProjection не создан"
+            "Android не создал MediaProjection"
         )
 
         projection = newProjection
 
-        val metrics = resources.displayMetrics
+        // Получаем реальные размеры дисплея.
+        val metrics = DisplayMetrics()
 
-        captureWidth = metrics.widthPixels
-        captureHeight = metrics.heightPixels
+        @Suppress("DEPRECATION")
+        val windowManager = getSystemService(
+            Context.WINDOW_SERVICE
+        ) as WindowManager
 
-        if (captureWidth <= 0 || captureHeight <= 0) {
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay.getRealMetrics(metrics)
+
+        val width = metrics.widthPixels
+        val height = metrics.heightPixels
+        val densityDpi = metrics.densityDpi
+
+        if (width <= 0 || height <= 0 || densityDpi <= 0) {
             throw IllegalStateException(
-                "Некорректный размер экрана"
+                "Android вернул некорректный размер экрана"
             )
         }
 
+        val pixelCount = width.toLong() * height.toLong()
+
+        if (pixelCount > MAX_CAPTURE_PIXELS) {
+            throw IllegalStateException(
+                "Разрешение экрана слишком большое: ${width}x${height}"
+            )
+        }
+
+        captureWidth = width
+        captureHeight = height
+
+        Log.i(
+            TAG,
+            "Размер экрана: ${width}x${height}"
+        )
+
+        // Отдельный поток для получения кадров.
         val thread = HandlerThread(
             "WSFischScreenCapture"
         )
 
         thread.start()
 
-        handlerThread = thread
+        captureThread = thread
+        captureHandler = Handler(thread.looper)
 
-        val handler = Handler(thread.looper)
-        captureHandler = handler
-
+        // ImageReader хранит максимум два необработанных кадра.
         val reader = ImageReader.newInstance(
-            captureWidth,
-            captureHeight,
+            width,
+            height,
             PixelFormat.RGBA_8888,
             2
         )
@@ -231,44 +295,47 @@ class ScreenCaptureService : Service() {
 
         reader.setOnImageAvailableListener(
             { source ->
-                val image = try {
-                    source.acquireLatestImage()
-                } catch (e: Exception) {
-                    Log.w(TAG, "Не удалось получить кадр", e)
-                    null
-                }
-
-                if (image != null) {
-                    try {
-                        publishFrame(image)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Ошибка обработки кадра", e)
-                    } finally {
-                        image.close()
-                    }
-                }
+                processAvailableImage(source)
             },
-            handler
+            captureHandler
         )
 
-        // ОБЯЗАТЕЛЬНО регистрируем callback
-        // ДО createVirtualDisplay().
+        // Android 14+ требует callback до createVirtualDisplay().
+        // Callback привязан к конкретному экземпляру projection.
+        val callback = object : MediaProjection.Callback() {
+
+            override fun onStop() {
+                Log.i(
+                    TAG,
+                    "MediaProjection остановлена системой"
+                )
+
+                mainHandler.post {
+                    handleProjectionStopped(newProjection)
+                }
+            }
+        }
+
+        projectionCallback = callback
+
         newProjection.registerCallback(
-            projectionCallback,
+            callback,
             mainHandler
         )
 
+        // Для одного разрешения пользователя создаём
+        // только один VirtualDisplay.
         val display = newProjection.createVirtualDisplay(
             "WSFischCapture",
-            captureWidth,
-            captureHeight,
-            metrics.densityDpi,
+            width,
+            height,
+            densityDpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
             reader.surface,
             null,
-            handler
+            captureHandler
         ) ?: throw IllegalStateException(
-            "VirtualDisplay не создан"
+            "Android не создал VirtualDisplay"
         )
 
         virtualDisplay = display
@@ -276,19 +343,58 @@ class ScreenCaptureService : Service() {
 
         Log.i(
             TAG,
-            "Захват запущен: ${captureWidth}x${captureHeight}"
+            "Захват запущен: ${width}x${height}"
         )
+    }
+
+    private fun processAvailableImage(
+        source: ImageReader
+    ) {
+        val image = try {
+            source.acquireLatestImage()
+        } catch (e: Exception) {
+            Log.w(TAG, "Не удалось получить изображение", e)
+            null
+        } ?: return
+
+        try {
+            val now = SystemClock.elapsedRealtime()
+
+            // Пропускаем лишние кадры, но всегда закрываем Image.
+            if (
+                now - lastFrameAt <
+                MIN_FRAME_INTERVAL_MS
+            ) {
+                return
+            }
+
+            lastFrameAt = now
+
+            publishFrame(image)
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Ошибка обработки кадра", e)
+
+        } finally {
+            try {
+                image.close()
+            } catch (e: Exception) {
+                Log.w(TAG, "Не удалось закрыть Image", e)
+            }
+        }
     }
 
     private fun publishFrame(image: Image) {
         val plane = image.planes.firstOrNull() ?: return
 
-        val buffer = plane.buffer
         val pixelStride = plane.pixelStride
         val rowStride = plane.rowStride
 
-        if (pixelStride != 4) {
-            Log.w(TAG, "Неожиданный pixelStride: $pixelStride")
+        if (pixelStride != 4 || rowStride <= 0) {
+            Log.w(
+                TAG,
+                "Неподдерживаемый формат: pixelStride=$pixelStride, rowStride=$rowStride"
+            )
             return
         }
 
@@ -297,51 +403,60 @@ class ScreenCaptureService : Service() {
 
         if (width <= 0 || height <= 0) return
 
-        val rowPadding =
-            (rowStride - pixelStride * width) / pixelStride
+        val pixelCountLong =
+            width.toLong() * height.toLong()
 
-        val paddedWidth = width + rowPadding
+        if (
+            pixelCountLong <= 0 ||
+            pixelCountLong > MAX_CAPTURE_PIXELS
+        ) {
+            Log.w(TAG, "Кадр слишком большой")
+            return
+        }
 
-        if (paddedWidth < width) return
+        if (rowStride % pixelStride != 0) {
+            Log.w(TAG, "Некорректный rowStride")
+            return
+        }
 
-        val raw = IntArray(
-            paddedWidth * height
-        )
+        val rowPixels = rowStride / pixelStride
 
+        if (rowPixels < width) {
+            Log.w(TAG, "Ширина строки меньше ширины кадра")
+            return
+        }
+
+        val buffer = plane.buffer
         buffer.rewind()
 
-        val intBuffer = buffer.asIntBuffer()
+        val input = buffer.asIntBuffer()
 
-        val available = minOf(
-            raw.size,
-            intBuffer.remaining()
-        )
+        val requiredInts =
+            rowPixels.toLong() * (height - 1) + width
 
-        if (available <= 0) return
+        if (requiredInts > input.limit().toLong()) {
+            Log.w(TAG, "Недостаточно данных в буфере кадра")
+            return
+        }
 
-        intBuffer.get(
-            raw,
-            0,
-            available
-        )
+        val pixels = try {
+            IntArray(pixelCountLong.toInt())
+        } catch (e: OutOfMemoryError) {
+            Log.e(TAG, "Недостаточно памяти для кадра", e)
+            return
+        }
 
-        val pixels = IntArray(
-            width * height
-        )
-
+        // Копируем строки напрямую в итоговый массив.
+        // Дополнительный большой промежуточный массив не создаётся.
         var y = 0
 
         while (y < height) {
-            val sourceOffset = y * paddedWidth
+            val sourceOffset = y * rowPixels
             val targetOffset = y * width
 
-            if (sourceOffset + width > available) {
-                return
-            }
+            input.position(sourceOffset)
 
-            System.arraycopy(
-                raw,
-                sourceOffset,
+            input.get(
                 pixels,
                 targetOffset,
                 width
@@ -363,6 +478,27 @@ class ScreenCaptureService : Service() {
         captureHeight = height
 
         latestFrame.set(frame)
+    }
+
+    private fun handleProjectionStopped(
+        stoppedProjection: MediaProjection
+    ) {
+        // Защита от запоздавшего callback старого сеанса.
+        if (projection !== stoppedProjection) {
+            return
+        }
+
+        Log.i(TAG, "Освобождение после системной остановки")
+
+        releaseCapture(stopProjection = false)
+
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (e: Exception) {
+            Log.w(TAG, "Ошибка удаления уведомления", e)
+        }
+
+        stopSelf()
     }
 
     fun snapshot(): CapturedFrame? {
@@ -471,49 +607,61 @@ class ScreenCaptureService : Service() {
     private fun releaseCapture(
         stopProjection: Boolean
     ) {
-        val oldProjection: MediaProjection?
-        val oldDisplay: VirtualDisplay?
-        val oldReader: ImageReader?
-        val oldThread: HandlerThread?
+        // Сначала отсоединяем ресурсы от сервиса.
+        // Повторный вызов этой функции безопасен.
+        captureStarted = false
 
-        synchronized(captureLock) {
-            captureStarted = false
+        latestFrame.set(null)
+        lastFrameAt = 0L
 
-            latestFrame.set(null)
+        val oldProjection = projection
+        val oldCallback = projectionCallback
+        val oldDisplay = virtualDisplay
+        val oldReader = imageReader
+        val oldThread = captureThread
 
-            oldProjection = projection
-            oldDisplay = virtualDisplay
-            oldReader = imageReader
-            oldThread = handlerThread
+        projection = null
+        projectionCallback = null
 
-            projection = null
-            virtualDisplay = null
-            imageReader = null
+        virtualDisplay = null
+        imageReader = null
 
-            handlerThread = null
-            captureHandler = null
+        captureThread = null
+        captureHandler = null
+
+        // Снимаем listener перед закрытием ImageReader.
+        try {
+            oldReader?.setOnImageAvailableListener(
+                null,
+                null
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Ошибка отключения listener", e)
         }
 
+        // Освобождаем виртуальный дисплей.
         try {
             oldDisplay?.release()
         } catch (e: Exception) {
             Log.w(TAG, "Ошибка освобождения VirtualDisplay", e)
         }
 
+        // Закрываем ImageReader.
         try {
-            oldReader?.setOnImageAvailableListener(null, null)
             oldReader?.close()
         } catch (e: Exception) {
             Log.w(TAG, "Ошибка закрытия ImageReader", e)
         }
 
         if (stopProjection && oldProjection != null) {
+            // Сначала убираем callback, чтобы stop()
+            // не вызвал повторную очистку ресурсов.
             try {
-                oldProjection.unregisterCallback(
-                    projectionCallback
-                )
+                if (oldCallback != null) {
+                    oldProjection.unregisterCallback(oldCallback)
+                }
             } catch (e: Exception) {
-                Log.w(TAG, "Callback уже освобождён", e)
+                Log.w(TAG, "Ошибка удаления callback", e)
             }
 
             try {
@@ -523,10 +671,11 @@ class ScreenCaptureService : Service() {
             }
         }
 
+        // Останавливаем поток после отключения ImageReader.
         try {
             oldThread?.quitSafely()
         } catch (e: Exception) {
-            Log.w(TAG, "Ошибка остановки потока", e)
+            Log.w(TAG, "Ошибка остановки HandlerThread", e)
         }
 
         Log.i(TAG, "Ресурсы захвата освобождены")
@@ -538,7 +687,9 @@ class ScreenCaptureService : Service() {
                 CHANNEL_ID,
                 "WSFisch screen capture",
                 NotificationManager.IMPORTANCE_LOW
-            )
+            ).apply {
+                description = "Уведомление о захвате экрана"
+            }
 
             getSystemService(NotificationManager::class.java)
                 .createNotificationChannel(channel)
@@ -559,6 +710,7 @@ class ScreenCaptureService : Service() {
                 .setContentTitle("WSFisch")
                 .setContentText("Захват экрана активен")
                 .setSmallIcon(android.R.drawable.ic_menu_camera)
+                .setOngoing(true)
                 .build()
         }
     }
