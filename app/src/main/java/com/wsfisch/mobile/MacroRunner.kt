@@ -150,14 +150,9 @@ object MacroRunner {
                     )
                 }
 
-                onStatus("ОЖИДАНИЕ · ищу SHAKE и мини-игру")
-
-                sleepCancellable(
-                    config.waitForBobberMs,
-                    stopFlag
-                )
-
-                if (stopFlag.get()) return
+                // Мини-игру проверяем сразу.
+                // Shake разрешаем искать после WaitForBobberMs.
+                onStatus("ПОИСК · отслеживаю мини-игру и SHAKE")
 
                 val waitResult = waitForShakeOrReel(
                     capture = capture,
@@ -184,7 +179,9 @@ object MacroRunner {
                     continue
                 }
 
-                onStatus("МИНИ-ИГРА · полоса найдена, веду рыбу")
+                onStatus(
+                    "МИНИ-ИГРА · полоса подтверждена, веду рыбу"
+                )
 
                 val reelResult = playReel(
                     capture = capture,
@@ -236,13 +233,17 @@ object MacroRunner {
         val started = SystemClock.elapsedRealtime()
 
         var lastSequence = -1L
+
         var lastClickedX = -1
         var lastClickedY = -1
         var lastClickAt = 0L
 
         var lastCandidate: ShakePrompt? = null
         var candidateStableFrames = 0
-        var barStableFrames = 0
+
+        var lastReelCandidate: ReelObservation? = null
+        var reelStableFrames = 0
+
         var shakeClicks = 0
         var lastStatusAt = 0L
         var previousFish: Int? = null
@@ -262,6 +263,10 @@ object MacroRunner {
 
             lastSequence = frame.sequence
 
+            val elapsed =
+                SystemClock.elapsedRealtime() - started
+
+            // Сначала всегда проверяем мини-игру.
             val reel = FischVision.detectReel(
                 frame,
                 config.specialRod,
@@ -269,15 +274,32 @@ object MacroRunner {
             )
 
             if (reel != null) {
-                barStableFrames++
+                val previous = lastReelCandidate
+
+                val sameGeometry =
+                    previous != null &&
+                    abs(previous.centerY - reel.centerY) <=
+                        max(18f, frame.height * 0.035f).toInt() &&
+                    abs(previous.barWidth - reel.barWidth) <=
+                        max(28f, previous.trackWidth * 0.28f).toInt()
+
+                reelStableFrames =
+                    if (sameGeometry) reelStableFrames + 1 else 1
+
+                lastReelCandidate = reel
 
                 if (reel.fishX != null) {
                     previousFish = reel.fishX
                 }
 
-                if (barStableFrames >= 2) {
+                val neededFrames =
+                    if (reel.confidence >= 0.58f) 2 else 3
+
+                if (reelStableFrames >= neededFrames) {
                     onStatus(
-                        "МИНИ-ИГРА ОБНАРУЖЕНА · рыба ${
+                        "МИНИ-ИГРА ОБНАРУЖЕНА · уверенность ${
+                            (reel.confidence * 100).toInt()
+                        }% · рыба ${
                             positionPct(
                                 reel.fishX,
                                 reel.trackLeft,
@@ -291,27 +313,53 @@ object MacroRunner {
 
                 if (
                     SystemClock.elapsedRealtime() - lastStatusAt >
-                    900L
+                    700L
                 ) {
-                    onStatus("ПОЛОСА НАЙДЕНА · жду маркер рыбы")
-                    lastStatusAt = SystemClock.elapsedRealtime()
+                    onStatus(
+                        "КАНДИДАТ МИНИ-ИГРЫ · подтверждаю $reelStableFrames/$neededFrames"
+                    )
+
+                    lastStatusAt =
+                        SystemClock.elapsedRealtime()
                 }
+
+                // Если видим возможную полосу, не нажимаем её
+                // круглые элементы как будто это Shake.
+                lastCandidate = null
+                candidateStableFrames = 0
             } else {
-                barStableFrames = 0
+                lastReelCandidate = null
+                reelStableFrames = 0
 
-                val prompt = FischVision.detectShake(frame)
+                // Ожидание поклёвки задерживает только поиск Shake.
+                // Распознавание мини-игры работает с первого кадра.
+                if (elapsed >= config.waitForBobberMs) {
+                    val prompt = FischVision.detectShake(frame)
 
-                if (prompt == null) {
-                    lastCandidate = null
-                    candidateStableFrames = 0
-                } else {
-                    val now = SystemClock.elapsedRealtime()
+                    if (prompt == null) {
+                        lastCandidate = null
+                        candidateStableFrames = 0
 
-                    val dx = prompt.x - lastClickedX
-                    val dy = prompt.y - lastClickedY
+                        if (
+                            SystemClock.elapsedRealtime() - lastStatusAt >
+                            1_200L
+                        ) {
+                            onStatus(
+                                "ПОИСК · проверяю мини-игру и SHAKE"
+                            )
 
-                    val sameAsLastClick =
-                        lastClickedX >= 0 &&
+                            lastStatusAt =
+                                SystemClock.elapsedRealtime()
+                        }
+                    } else {
+                        val now =
+                            SystemClock.elapsedRealtime()
+
+                        val dx = prompt.x - lastClickedX
+                        val dy = prompt.y - lastClickedY
+
+                        val sameAsLastClick =
+                            lastClickedX >= 0 &&
                             kotlin.math.sqrt(
                                 (dx * dx + dy * dy).toFloat()
                             ) < max(
@@ -319,71 +367,89 @@ object MacroRunner {
                                 prompt.diameter * 0.35f
                             )
 
-                    val canRetrySame =
-                        sameAsLastClick &&
+                        val canRetrySame =
+                            sameAsLastClick &&
                             now - lastClickAt >= 850L
 
-                    val movedToNewPrompt = !sameAsLastClick
+                        val movedToNewPrompt = !sameAsLastClick
+                        val previous = lastCandidate
 
-                    val previous = lastCandidate
+                        candidateStableFrames =
+                            if (
+                                previous != null &&
+                                abs(previous.x - prompt.x) <
+                                    prompt.diameter * 0.30f &&
+                                abs(previous.y - prompt.y) <
+                                    prompt.diameter * 0.30f
+                            ) {
+                                candidateStableFrames + 1
+                            } else {
+                                1
+                            }
 
-                    if (
-                        previous != null &&
-                        abs(previous.x - prompt.x) <
-                        prompt.diameter * 0.30f &&
-                        abs(previous.y - prompt.y) <
-                        prompt.diameter * 0.30f
-                    ) {
-                        candidateStableFrames++
-                    } else {
-                        candidateStableFrames = 1
-                    }
+                        lastCandidate = prompt
 
-                    lastCandidate = prompt
+                        val confident =
+                            prompt.confidence >= 0.68f
 
-                    val confident = prompt.confidence >= 0.68f
-                    val stable = candidateStableFrames >= 2
+                        val stable =
+                            candidateStableFrames >= 2
 
-                    if (
-                        (movedToNewPrompt || canRetrySame) &&
-                        (confident || stable)
-                    ) {
-                        val tapped = accessibility.tap(
-                            prompt.x.toFloat(),
-                            prompt.y.toFloat(),
-                            70L
-                        )
+                        if (
+                            (movedToNewPrompt || canRetrySame) &&
+                            (confident || stable)
+                        ) {
+                            val tapped = accessibility.tap(
+                                prompt.x.toFloat(),
+                                prompt.y.toFloat(),
+                                70L
+                            )
 
-                        if (tapped) {
-                            shakeClicks++
-                            lastClickedX = prompt.x
-                            lastClickedY = prompt.y
-                            lastClickAt =
+                            if (tapped) {
+                                shakeClicks++
+
+                                lastClickedX = prompt.x
+                                lastClickedY = prompt.y
+
+                                lastClickAt =
+                                    SystemClock.elapsedRealtime()
+
+                                onStatus(
+                                    "SHAKE #$shakeClicks · ${prompt.x},${prompt.y}"
+                                )
+                            } else {
+                                onStatus(
+                                    "SHAKE НАЙДЕН, НО КАСАНИЕ ОТКЛОНЕНО"
+                                )
+                            }
+
+                            candidateStableFrames = 0
+                        } else if (
+                            SystemClock.elapsedRealtime() - lastStatusAt >
+                            1_100L
+                        ) {
+                            onStatus(
+                                "ИЩУ SHAKE · кандидат ${
+                                    (prompt.confidence * 100)
+                                        .toInt()
+                                        .coerceIn(0, 100)
+                                }%"
+                            )
+
+                            lastStatusAt =
                                 SystemClock.elapsedRealtime()
-
-                            onStatus(
-                                "SHAKE #$shakeClicks · ${prompt.x},${prompt.y}"
-                            )
-                        } else {
-                            onStatus(
-                                "SHAKE НАЙДЕН, НО КАСАНИЕ ОТКЛОНЕНО"
-                            )
                         }
-
-                        candidateStableFrames = 0
-                    } else if (
-                        SystemClock.elapsedRealtime() - lastStatusAt >
-                        1_100L
-                    ) {
-                        onStatus(
-                            "ИЩУ SHAKE · кандидат ${
-                                prompt.confidence.toInt().coerceIn(0, 100)
-                            }%"
-                        )
-
-                        lastStatusAt =
-                            SystemClock.elapsedRealtime()
                     }
+                } else if (
+                    SystemClock.elapsedRealtime() - lastStatusAt >
+                    1_000L
+                ) {
+                    onStatus(
+                        "ПРОВЕРКА МИНИ-ИГРЫ · жду интерфейс поклёвки"
+                    )
+
+                    lastStatusAt =
+                        SystemClock.elapsedRealtime()
                 }
             }
 
@@ -409,7 +475,8 @@ object MacroRunner {
         stopFlag: AtomicBoolean,
         onStatus: (String) -> Unit
     ): ReelEnd {
-        val started = SystemClock.elapsedRealtime()
+        val started =
+            SystemClock.elapsedRealtime()
 
         var lastSequence = -1L
         var lastFishX: Int? = initial.fishX
@@ -447,52 +514,70 @@ object MacroRunner {
             if (observation == null) {
                 missingBarFrames++
 
-                if (missingBarFrames >= 8) {
+                if (missingBarFrames >= 12) {
                     return ReelEnd.BAR_DISAPPEARED
                 }
 
-                Thread.sleep(55L)
+                Thread.sleep(45L)
                 continue
             }
 
             missingBarFrames = 0
 
             val fishX = observation.fishX
-
-            if (fishX == null) {
-                if (noFishSince == 0L) {
-                    noFishSince = SystemClock.elapsedRealtime()
-                }
-
-                if (
-                    SystemClock.elapsedRealtime() - noFishSince >
-                    4_000L &&
-                    SystemClock.elapsedRealtime() - lastStatusAt >
-                    1_000L
-                ) {
-                    onStatus(
-                        "ПОЛОСА НАЙДЕНА · не вижу маркер рыбы"
-                    )
-
-                    lastStatusAt =
-                        SystemClock.elapsedRealtime()
-                }
-
-                Thread.sleep(55L)
-                continue
-            }
-
-            noFishSince = 0L
-
             val now = SystemClock.elapsedRealtime()
 
             val dt = (
                 (now - lastSampleAt).coerceIn(25L, 250L)
-                ) / 1000f
+            ) / 1000f
 
             val currentBarCenter = observation.barCenter
             val oldFish = lastFishX
             val oldBar = lastBarCenter
+
+            if (fishX == null) {
+                if (noFishSince == 0L) {
+                    noFishSince = now
+                }
+
+                if (
+                    now - noFishSince > 4_000L &&
+                    now - lastStatusAt > 1_000L
+                ) {
+                    onStatus(
+                        "ПОЛОСА НАЙДЕНА · ищу маркер рыбы"
+                    )
+
+                    lastStatusAt = now
+                }
+
+                holdAccumulator += 0.46f
+
+                if (holdAccumulator >= 1f) {
+                    holdAccumulator -= 1f
+
+                    val ok = accessibility.pressAndHold(
+                        x = touchX,
+                        y = touchY,
+                        durationMs = CONTROL_PULSE_MS,
+                        stopFlag = stopFlag
+                    )
+
+                    if (!ok && !stopFlag.get()) {
+                        throw IllegalStateException(
+                            "Не удалось отправить касание управления мини-игрой"
+                        )
+                    }
+                } else {
+                    Thread.sleep(CONTROL_PULSE_MS)
+                }
+
+                lastBarCenter = currentBarCenter
+                lastSampleAt = now
+                continue
+            }
+
+            noFishSince = 0L
 
             if (
                 oldFish != null &&
@@ -514,16 +599,19 @@ object MacroRunner {
                     0.45f * barVelocity
             }
 
-            val error = fishX - currentBarCenter
-            val relativeVelocity = fishVelocity - barVelocity
+            val error =
+                fishX - currentBarCenter
+
+            val relativeVelocity =
+                fishVelocity - barVelocity
 
             val normalizedPosition = (
                 error / (observation.trackWidth * 0.22f)
-                ).coerceIn(-1f, 1f)
+            ).coerceIn(-1f, 1f)
 
             val normalizedVelocity = (
                 relativeVelocity / (observation.trackWidth * 1.5f)
-                ).coerceIn(-1f, 1f)
+            ).coerceIn(-1f, 1f)
 
             val duty = (
                 0.46f +
@@ -534,10 +622,7 @@ object MacroRunner {
             holdAccumulator += duty
 
             val holdNow = holdAccumulator >= 1f
-
-            if (holdNow) {
-                holdAccumulator -= 1f
-            }
+            if (holdNow) holdAccumulator -= 1f
 
             if (holdNow) {
                 val ok = accessibility.pressAndHold(
@@ -625,7 +710,7 @@ object MacroRunner {
 
         val pct = (
             (value - left) * 100f / (right - left)
-            ).toInt().coerceIn(0, 100)
+        ).toInt().coerceIn(0, 100)
 
         return "$pct%"
     }
