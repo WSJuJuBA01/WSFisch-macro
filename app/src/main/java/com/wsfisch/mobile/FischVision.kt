@@ -17,7 +17,7 @@ data class CapturedFrame(
 ) {
     init {
         require(width > 0 && height > 0)
-        require(pixels.size >= width * height)
+        require(pixels.size.toLong() >= width.toLong() * height.toLong())
     }
 
     fun pixel(x: Int, y: Int): Int {
@@ -52,7 +52,23 @@ object FischVision {
     private data class RowSpan(
         val left: Int,
         val right: Int,
-        val y: Int
+        val y: Int,
+        val hits: Int
+    )
+
+    private data class SearchProfile(
+        val leftPct: Float,
+        val rightPct: Float,
+        val topPct: Float,
+        val bottomPct: Float,
+        val priority: Float
+    )
+
+    private data class BarCandidate(
+        val left: Int,
+        val right: Int,
+        val centerY: Int,
+        val confidence: Float
     )
 
     fun detectShake(frame: CapturedFrame): ShakePrompt? {
@@ -78,6 +94,7 @@ object FischVision {
         while (gy < gh) {
             val py = (y0 + gy * step).coerceAtMost(h - 1)
             var gx = 0
+
             while (gx < gw) {
                 val px = (x0 + gx * step).coerceAtMost(w - 1)
                 mask[gy * gw + gx] =
@@ -95,6 +112,7 @@ object FischVision {
 
             var head = 0
             var tail = 0
+
             queue[tail++] = start
             visited[start] = true
 
@@ -102,6 +120,7 @@ object FischVision {
             var maxGX = -1
             var minGY = gh
             var maxGY = -1
+
             var sumGX = 0L
             var sumGY = 0L
 
@@ -110,21 +129,24 @@ object FischVision {
                 val cy = index / gw
                 val cx = index - cy * gw
 
-                if (cx < minGX) minGX = cx
-                if (cx > maxGX) maxGX = cx
-                if (cy < minGY) minGY = cy
-                if (cy > maxGY) maxGY = cy
+                minGX = min(minGX, cx)
+                maxGX = max(maxGX, cx)
+                minGY = min(minGY, cy)
+                maxGY = max(maxGY, cy)
 
                 sumGX += cx
                 sumGY += cy
 
                 var ny = cy - 1
+
                 while (ny <= cy + 1) {
                     if (ny in 0 until gh) {
                         var nx = cx - 1
+
                         while (nx <= cx + 1) {
                             if (nx in 0 until gw) {
                                 val ni = ny * gw + nx
+
                                 if (mask[ni] && !visited[ni]) {
                                     visited[ni] = true
                                     queue[tail++] = ni
@@ -139,13 +161,17 @@ object FischVision {
 
             val boxWGrid = maxGX - minGX + 1
             val boxHGrid = maxGY - minGY + 1
+
             if (boxWGrid < 6 || boxHGrid < 6) continue
 
             val boxW = boxWGrid * step
             val boxH = boxHGrid * step
-            val diameter = ((boxW + boxH) / 2f).roundToInt()
 
-            if (diameter < shortSide * 0.045f ||
+            val diameter =
+                ((boxW + boxH) / 2f).roundToInt()
+
+            if (
+                diameter < shortSide * 0.045f ||
                 diameter > shortSide * 0.31f
             ) continue
 
@@ -155,30 +181,34 @@ object FischVision {
 
             if (aspect < 0.72f) continue
 
-            val boxArea = (boxWGrid * boxHGrid).coerceAtLeast(1)
-            val fillRatio = tail.toFloat() / boxArea
+            val boxArea =
+                (boxWGrid * boxHGrid).coerceAtLeast(1)
+
+            val fillRatio =
+                tail.toFloat() / boxArea
 
             if (fillRatio < 0.018f || fillRatio > 0.58f) continue
 
             val centerX =
                 x0 + ((sumGX.toFloat() / tail) * step).roundToInt()
+
             val centerY =
                 y0 + ((sumGY.toFloat() / tail) * step).roundToInt()
 
-            val ringCoverage =
+            val ring =
                 ringCoverage(frame, centerX, centerY, diameter)
 
-            val darkCenter =
+            val dark =
                 darkCenterCoverage(frame, centerX, centerY, diameter)
 
-            if (ringCoverage < 0.20f || darkCenter < 0.12f) continue
+            if (ring < 0.20f || dark < 0.12f) continue
 
             val aspectScore =
                 ((aspect - 0.72f) / 0.28f).coerceIn(0f, 1f)
 
             val confidence = (
-                ringCoverage * 0.55f +
-                    darkCenter * 0.25f +
+                ring * 0.55f +
+                    dark * 0.25f +
                     aspectScore * 0.20f
                 ).coerceIn(0f, 1f)
 
@@ -194,17 +224,17 @@ object FischVision {
 
         if (candidates.isEmpty()) return null
 
-        val sorted = candidates.sortedByDescending { it.confidence }
+        val sorted =
+            candidates.sortedByDescending { it.confidence }
+
         val unique = ArrayList<ShakePrompt>()
 
         for (candidate in sorted) {
             val duplicate = unique.any {
                 val dx = it.x - candidate.x
                 val dy = it.y - candidate.y
-                val distance =
-                    sqrt((dx * dx + dy * dy).toFloat())
 
-                distance <
+                sqrt((dx * dx + dy * dy).toFloat()) <
                     max(it.diameter, candidate.diameter) * 0.28f
             }
 
@@ -214,6 +244,16 @@ object FischVision {
         return unique.maxByOrNull { it.confidence }
     }
 
+    /**
+     * Поиск мини-игры сразу по нескольким областям экрана.
+     *
+     * 1. Основная область выбранной удочки.
+     * 2. Расширенная нижняя область.
+     * 3. Широкая центральная область.
+     * 4. Почти весь экран.
+     *
+     * Наличие маркера рыбы не обязательно для обнаружения мини-игры.
+     */
     fun detectReel(
         frame: CapturedFrame,
         specialRod: String = "None",
@@ -221,96 +261,253 @@ object FischVision {
     ): ReelObservation? {
         val w = frame.width
         val h = frame.height
+
         if (w < 320 || h < 480) return null
 
         val rod = specialRod.trim().lowercase()
 
-        val trackLeftPct: Float
-        val trackRightPct: Float
-        val yTopPct: Float
-        val yBottomPct: Float
+        val rodProfile = when (rod) {
+            "bellona's waraxe" ->
+                SearchProfile(0.05f, 0.95f, 0.79f, 0.94f, 0.12f)
 
-        when (rod) {
-            "bellona's waraxe" -> {
-                trackLeftPct = 0.05f
-                trackRightPct = 0.95f
-                yTopPct = 0.837f
-                yBottomPct = 0.875f
+            "stellarwave melody" ->
+                SearchProfile(0.22f, 0.78f, 0.72f, 0.98f, 0.12f)
+
+            "remembrance" ->
+                SearchProfile(0.30f, 0.70f, 0.76f, 0.90f, 0.12f)
+
+            else ->
+                SearchProfile(0.30f, 0.70f, 0.78f, 0.93f, 0.12f)
+        }
+
+        val profiles = listOf(
+            rodProfile,
+
+            SearchProfile(
+                rodProfile.leftPct,
+                rodProfile.rightPct,
+                0.56f,
+                0.985f,
+                0.07f
+            ),
+
+            SearchProfile(
+                0.20f,
+                0.80f,
+                0.56f,
+                0.985f,
+                0.02f
+            ),
+
+            SearchProfile(
+                0.05f,
+                0.95f,
+                0.56f,
+                0.985f,
+                -0.04f
+            )
+        )
+
+        var best: ReelObservation? = null
+        var bestScore = Float.NEGATIVE_INFINITY
+
+        for ((index, profile) in profiles.withIndex()) {
+            val left =
+                (w * profile.leftPct)
+                    .roundToInt()
+                    .coerceIn(0, w - 2)
+
+            val right =
+                (w * profile.rightPct)
+                    .roundToInt()
+                    .coerceIn(left + 1, w - 1)
+
+            val top =
+                (h * profile.topPct)
+                    .roundToInt()
+                    .coerceIn(0, h - 2)
+
+            val bottom =
+                (h * profile.bottomPct)
+                    .roundToInt()
+                    .coerceIn(top + 1, h - 1)
+
+            val candidate = scanForWhiteBar(
+                frame,
+                left,
+                right,
+                top,
+                bottom
+            ) ?: continue
+
+            val fish =
+                findFishColor(
+                    frame,
+                    left,
+                    right,
+                    candidate.centerY,
+                    previousFishX
+                ) ?: findDarkNotch(
+                    frame,
+                    left,
+                    right,
+                    candidate.centerY,
+                    previousFishX
+                )
+
+            val result = ReelObservation(
+                trackLeft = left,
+                trackRight = right,
+                barLeft = candidate.left,
+                barRight = candidate.right,
+                fishX = fish,
+                centerY = candidate.centerY,
+                confidence = candidate.confidence
+            )
+
+            val score =
+                candidate.confidence + profile.priority
+
+            if (score > bestScore) {
+                bestScore = score
+                best = result
             }
 
-            "stellarwave melody" -> {
-                trackLeftPct = 0.22f
-                trackRightPct = 0.78f
-                yTopPct = 0.78f
-                yBottomPct = 0.95f
-            }
-
-            "remembrance" -> {
-                trackLeftPct = 0.30f
-                trackRightPct = 0.70f
-                yTopPct = 0.807f
-                yBottomPct = 0.847f
-            }
-
-            else -> {
-                trackLeftPct = 0.30f
-                trackRightPct = 0.70f
-                yTopPct = 0.837f
-                yBottomPct = 0.875f
+            if (
+                index <= 1 &&
+                candidate.confidence >= 0.82f
+            ) {
+                return result
             }
         }
 
-        val trackLeft =
-            (w * trackLeftPct).roundToInt().coerceIn(0, w - 2)
+        return best
+    }
 
-        val trackRight =
-            (w * trackRightPct).roundToInt()
-                .coerceIn(trackLeft + 1, w - 1)
-
-        val yTop =
-            (h * yTopPct).roundToInt().coerceIn(0, h - 2)
-
-        val yBottom =
-            (h * yBottomPct).roundToInt()
-                .coerceIn(yTop + 1, h - 1)
-
+    private fun scanForWhiteBar(
+        frame: CapturedFrame,
+        trackLeft: Int,
+        trackRight: Int,
+        yTop: Int,
+        yBottom: Int
+    ): BarCandidate? {
         val trackWidth = trackRight - trackLeft + 1
 
-        val rows = ArrayList<RowSpan>()
-        val yStep = max(2, h / 1200)
-        val minSpan = max(18, (trackWidth * 0.055f).roundToInt())
-        val maxSpan = (trackWidth * 0.88f).roundToInt()
+        if (trackWidth < 80 || yBottom - yTop < 6) {
+            return null
+        }
+
+        val xStep = 2
+        val yStep = max(2, frame.height / 900)
+
+        val minSpan =
+            max(14, (trackWidth * 0.045f).roundToInt())
+
+        val maxSpan = min(
+            (trackWidth * 0.86f).roundToInt(),
+            (frame.width * 0.72f).roundToInt()
+        )
+
+        val rows = ArrayList<RowSpan>(160)
 
         var y = yTop
+
         while (y <= yBottom) {
-            var first = -1
-            var last = -1
+            var runStart = -1
+            var lastWhite = -1
+            var hits = 0
+            var gapSamples = 0
+
+            val rowSegments = ArrayList<RowSpan>(6)
+
             var x = trackLeft
+
+            fun finishRun() {
+                if (
+                    runStart >= 0 &&
+                    hits >= 2 &&
+                    lastWhite >= runStart
+                ) {
+                    rowSegments.add(
+                        RowSpan(
+                            runStart,
+                            lastWhite,
+                            y,
+                            hits
+                        )
+                    )
+                }
+
+                runStart = -1
+                lastWhite = -1
+                hits = 0
+                gapSamples = 0
+            }
 
             while (x <= trackRight) {
                 if (isBarWhite(frame.pixel(x, y))) {
-                    if (first < 0) first = x
-                    last = x
+                    if (runStart < 0) runStart = x
+
+                    lastWhite = x
+                    hits++
+                    gapSamples = 0
+                } else if (runStart >= 0) {
+                    gapSamples++
+
+                    if (gapSamples > 1) {
+                        finishRun()
+                    }
                 }
-                x++
+
+                x += xStep
             }
 
-            if (first >= 0 && last >= first) {
-                val span = last - first + 1
+            finishRun()
 
-                if (span in minSpan..maxSpan) {
-                    var hits = 0
-                    var sx = first
+            if (rowSegments.isNotEmpty()) {
+                val ordered = rowSegments.sortedBy { it.left }
 
-                    while (sx <= last) {
-                        if (isBarWhite(frame.pixel(sx, y))) hits++
-                        sx++
-                    }
+                val mergeGap =
+                    max(8, (trackWidth * 0.035f).roundToInt())
 
-                    if (hits >= 2) {
-                        rows.add(RowSpan(first, last, y))
+                var mergedLeft = ordered[0].left
+                var mergedRight = ordered[0].right
+                var mergedHits = ordered[0].hits
+
+                fun emitMerged() {
+                    val span = mergedRight - mergedLeft + 1
+
+                    if (
+                        span in minSpan..maxSpan &&
+                        mergedHits >= 3
+                    ) {
+                        rows.add(
+                            RowSpan(
+                                mergedLeft,
+                                mergedRight,
+                                y,
+                                mergedHits
+                            )
+                        )
                     }
                 }
+
+                for (segmentIndex in 1 until ordered.size) {
+                    val segment = ordered[segmentIndex]
+
+                    if (segment.left - mergedRight <= mergeGap) {
+                        mergedRight = max(mergedRight, segment.right)
+                        mergedHits += segment.hits
+                    } else {
+                        emitMerged()
+
+                        mergedLeft = segment.left
+                        mergedRight = segment.right
+                        mergedHits = segment.hits
+                    }
+                }
+
+                emitMerged()
             }
 
             y += yStep
@@ -319,79 +516,99 @@ object FischVision {
         if (rows.size < 3) return null
 
         val edgeTolerance =
-            max(6, (trackWidth * 0.035f).roundToInt())
+            max(6, (trackWidth * 0.025f).roundToInt())
 
-        var bestCluster: List<RowSpan>? = null
+        val maxClusterHeight =
+            max(24, (frame.height * 0.05f).roundToInt())
+
+        var best: BarCandidate? = null
         var bestScore = Float.NEGATIVE_INFINITY
 
         for (anchor in rows) {
             val cluster = rows.filter {
                 abs(it.left - anchor.left) <= edgeTolerance &&
-                    abs(it.right - anchor.right) <= edgeTolerance
+                    abs(it.right - anchor.right) <= edgeTolerance &&
+                    abs(it.y - anchor.y) <= maxClusterHeight
             }
 
-            if (cluster.size < 3) continue
+            val distinctYs = cluster.map { it.y }.distinct()
 
-            val avgY = cluster.map { it.y }.average().toFloat()
-            val width =
-                cluster.map { it.right - it.left }.average().toFloat()
+            if (distinctYs.size < 3) continue
 
-            val expectedY = h * ((yTopPct + yBottomPct) / 2f)
-            val yPenalty = abs(avgY - expectedY) / h
-            val widthPenalty =
-                abs(width - trackWidth * 0.30f) / trackWidth
+            val minY = distinctYs.minOrNull() ?: continue
+            val maxY = distinctYs.maxOrNull() ?: continue
+
+            val verticalSpan = maxY - minY + yStep
+
+            if (
+                verticalSpan < yStep * 2 ||
+                verticalSpan > maxClusterHeight
+            ) continue
+
+            val barLeft =
+                median(cluster.map { it.left }).roundToInt()
+
+            val barRight =
+                median(cluster.map { it.right }).roundToInt()
+
+            if (barRight <= barLeft) continue
+
+            val barWidth = barRight - barLeft + 1
+            val widthRatio = barWidth.toFloat() / trackWidth
+
+            if (widthRatio !in 0.045f..0.86f) continue
+
+            val centerY =
+                median(distinctYs).roundToInt()
+
+            val rowsScore =
+                (distinctYs.size / 7f).coerceIn(0f, 1f)
+
+            val heightScore =
+                (verticalSpan / max(
+                    8f,
+                    frame.height * 0.018f
+                )).coerceIn(0f, 1f)
+
+            val widthScore =
+                (1f - abs(widthRatio - 0.30f) / 0.58f)
+                    .coerceIn(0f, 1f)
+
+            val lowerScore =
+                ((centerY.toFloat() / frame.height - 0.52f) / 0.46f)
+                    .coerceIn(0f, 1f)
+
+            val centerX = (barLeft + barRight) / 2f
+
+            val centerScore =
+                (1f - abs(centerX - frame.width / 2f) /
+                    (frame.width * 0.50f)).coerceIn(0f, 1f)
+
+            val compactness =
+                (1f - verticalSpan.toFloat() / maxClusterHeight)
+                    .coerceIn(0f, 1f)
 
             val score =
-                cluster.size * 1.0f -
-                    yPenalty * 10f -
-                    widthPenalty * 0.35f
+                rowsScore * 0.34f +
+                    heightScore * 0.18f +
+                    widthScore * 0.20f +
+                    lowerScore * 0.13f +
+                    centerScore * 0.08f +
+                    compactness * 0.07f
 
             if (score > bestScore) {
                 bestScore = score
-                bestCluster = cluster
+
+                best = BarCandidate(
+                    left = barLeft,
+                    right = barRight,
+                    centerY = centerY,
+                    confidence = score.coerceIn(0f, 1f)
+                )
             }
         }
 
-        val cluster = bestCluster ?: return null
-        if (cluster.size < 3) return null
-
-        val barLeft =
-            median(cluster.map { it.left }).roundToInt()
-
-        val barRight =
-            median(cluster.map { it.right }).roundToInt()
-
-        if (barRight <= barLeft) return null
-
-        val centerY =
-            median(cluster.map { it.y }).roundToInt()
-
-        val fishX = findFishColor(
-            frame,
-            trackLeft,
-            trackRight,
-            centerY,
-            previousFishX
-        ) ?: findDarkNotch(
-            frame,
-            trackLeft,
-            trackRight,
-            centerY,
-            previousFishX
-        )
-
-        val rowConfidence =
-            (cluster.size / 12f).coerceIn(0.15f, 1f)
-
-        return ReelObservation(
-            trackLeft = trackLeft,
-            trackRight = trackRight,
-            barLeft = barLeft,
-            barRight = barRight,
-            fishX = fishX,
-            centerY = centerY,
-            confidence = rowConfidence
-        )
+        return best?.takeIf { it.confidence >= 0.38f }
     }
 
     private fun findFishColor(
@@ -401,14 +618,20 @@ object FischVision {
         centerY: Int,
         previousFishX: Int?
     ): Int? {
-        val h = frame.height
-        val yRadius = max(8, (h * 0.018f).roundToInt())
-        val yStart = (centerY - yRadius).coerceAtLeast(0)
-        val yEnd = (centerY + yRadius).coerceAtMost(h - 1)
+        val yRadius =
+            max(8, (frame.height * 0.018f).roundToInt())
 
-        val votes = IntArray(trackRight - trackLeft + 1)
+        val yStart =
+            (centerY - yRadius).coerceAtLeast(0)
+
+        val yEnd =
+            (centerY + yRadius).coerceAtMost(frame.height - 1)
+
+        val votes =
+            IntArray(trackRight - trackLeft + 1)
 
         var y = yStart
+
         while (y <= yEnd) {
             var x = trackLeft
 
@@ -428,31 +651,31 @@ object FischVision {
         var runEnd = -1
         var x = 0
 
-        while (x < votes.size) {
-            if (votes[x] >= 2) {
+        while (x <= votes.size) {
+            if (x < votes.size && votes[x] >= 2) {
                 if (runStart < 0) runStart = x
                 runEnd = x
             } else if (runStart >= 0) {
                 val runWidth = runEnd - runStart + 1
 
-                if (runWidth <= 28) {
+                if (runWidth <= max(28, votes.size / 12)) {
                     var sum = 0
-                    var i = runStart
 
-                    while (i <= runEnd) {
+                    for (i in runStart..runEnd) {
                         sum += votes[i]
-                        i++
                     }
 
                     val center =
                         trackLeft + (runStart + runEnd) / 2
 
-                    val adjusted = sum -
+                    val continuityPenalty =
                         if (previousFishX != null) {
                             abs(center - previousFishX) / 12
                         } else {
                             0
                         }
+
+                    val adjusted = sum - continuityPenalty
 
                     if (adjusted > bestVotes) {
                         bestVotes = adjusted
@@ -467,36 +690,11 @@ object FischVision {
             x++
         }
 
-        if (runStart >= 0) {
-            val runWidth = runEnd - runStart + 1
-
-            if (runWidth <= 28) {
-                var sum = 0
-                var i = runStart
-
-                while (i <= runEnd) {
-                    sum += votes[i]
-                    i++
-                }
-
-                val center =
-                    trackLeft + (runStart + runEnd) / 2
-
-                val adjusted = sum -
-                    if (previousFishX != null) {
-                        abs(center - previousFishX) / 12
-                    } else {
-                        0
-                    }
-
-                if (adjusted > bestVotes) {
-                    bestVotes = adjusted
-                    bestX = center
-                }
-            }
+        return if (bestX >= 0 && bestVotes >= 3) {
+            bestX
+        } else {
+            null
         }
-
-        return if (bestX >= 0 && bestVotes >= 3) bestX else null
     }
 
     private fun findDarkNotch(
@@ -508,8 +706,16 @@ object FischVision {
     ): Int? {
         val width = trackRight - trackLeft + 1
         val offset = max(5, (width * 0.025f).roundToInt())
+        val dy = max(5, (frame.height * 0.005f).roundToInt())
 
-        val yOffsets = intArrayOf(-12, -6, 0, 6, 12)
+        val yOffsets = intArrayOf(
+            -2 * dy,
+            -dy,
+            0,
+            dy,
+            2 * dy
+        )
+
         val ySamples = yOffsets.map {
             (centerY + it).coerceIn(0, frame.height - 1)
         }
@@ -527,18 +733,27 @@ object FischVision {
                 val center = luminance(frame.pixel(x, sampleY))
                 val left = luminance(frame.pixel(x - offset, sampleY))
                 val right = luminance(frame.pixel(x + offset, sampleY))
-                val side = (left + right) / 2f
-                val margin = max(9f, side * 0.18f)
 
-                if (side - center >= margin) votes++
+                val margin = max(9f, max(left, right) * 0.18f)
+
+                if (
+                    left - center >= margin &&
+                    right - center >= margin
+                ) {
+                    votes++
+                }
             }
 
             if (votes >= 3) {
                 val distance =
-                    if (previousFishX == null) 0
-                    else abs(x - previousFishX)
+                    if (previousFishX == null) {
+                        0
+                    } else {
+                        abs(x - previousFishX)
+                    }
 
-                if (votes > bestVotes ||
+                if (
+                    votes > bestVotes ||
                     (votes == bestVotes && distance < bestDistance)
                 ) {
                     bestVotes = votes
@@ -562,21 +777,25 @@ object FischVision {
         var hits = 0
         var total = 0
 
-        val radii = floatArrayOf(0.435f, 0.465f, 0.49f)
-
-        for (radiusFactor in radii) {
-            val radius = diameter * radiusFactor
+        for (factor in floatArrayOf(0.435f, 0.465f, 0.49f)) {
+            val radius = diameter * factor
             var angle = 0
 
             while (angle < 360) {
                 val rad = Math.toRadians(angle.toDouble())
-                val x = (cx + cos(rad) * radius).roundToInt()
-                val y = (cy + sin(rad) * radius).roundToInt()
 
-                if (x in 0 until frame.width &&
+                val x =
+                    (cx + cos(rad) * radius).roundToInt()
+
+                val y =
+                    (cy + sin(rad) * radius).roundToInt()
+
+                if (
+                    x in 0 until frame.width &&
                     y in 0 until frame.height
                 ) {
                     total++
+
                     if (isNeutralRingPixel(frame.pixel(x, y))) {
                         hits++
                     }
@@ -586,7 +805,11 @@ object FischVision {
             }
         }
 
-        return if (total == 0) 0f else hits.toFloat() / total
+        return if (total == 0) {
+            0f
+        } else {
+            hits.toFloat() / total
+        }
     }
 
     private fun darkCenterCoverage(
@@ -598,22 +821,26 @@ object FischVision {
         var hits = 0
         var total = 0
 
-        val radii = floatArrayOf(0.08f, 0.16f, 0.24f)
-
-        for (radiusFactor in radii) {
-            val radius = diameter * radiusFactor
+        for (factor in floatArrayOf(0.08f, 0.16f, 0.24f)) {
+            val radius = diameter * factor
             var angle = 0
 
             while (angle < 360) {
                 val rad = Math.toRadians(angle.toDouble())
-                val x = (cx + cos(rad) * radius).roundToInt()
-                val y = (cy + sin(rad) * radius).roundToInt()
 
-                if (x in 0 until frame.width &&
+                val x =
+                    (cx + cos(rad) * radius).roundToInt()
+
+                val y =
+                    (cy + sin(rad) * radius).roundToInt()
+
+                if (
+                    x in 0 until frame.width &&
                     y in 0 until frame.height
                 ) {
                     total++
-                    if (luminance(frame.pixel(x, y)) < 155) {
+
+                    if (luminance(frame.pixel(x, y)) < 155f) {
                         hits++
                     }
                 }
@@ -622,7 +849,11 @@ object FischVision {
             }
         }
 
-        return if (total == 0) 0f else hits.toFloat() / total
+        return if (total == 0) {
+            0f
+        } else {
+            hits.toFloat() / total
+        }
     }
 
     private fun isNeutralRingPixel(argb: Int): Boolean {
@@ -630,11 +861,10 @@ object FischVision {
         val g = (argb shr 8) and 0xff
         val b = argb and 0xff
 
-        val minChannel = min(r, min(g, b))
-        val maxChannel = max(r, max(g, b))
+        val low = min(r, min(g, b))
+        val high = max(r, max(g, b))
 
-        return minChannel >= 138 &&
-            maxChannel - minChannel <= 76
+        return low >= 138 && high - low <= 76
     }
 
     private fun isBarWhite(argb: Int): Boolean {
@@ -653,9 +883,10 @@ object FischVision {
         val g = (argb shr 8) and 0xff
         val b = argb and 0xff
 
-        return abs(r - 0x43) <= 20 &&
-            abs(g - 0x4B) <= 20 &&
-            abs(b - 0x5B) <= 20
+        // Правильный порядок RGB для цвета #5B4B43.
+        return abs(r - 0x5B) <= 24 &&
+            abs(g - 0x4B) <= 24 &&
+            abs(b - 0x43) <= 24
     }
 
     private fun luminance(argb: Int): Float {
