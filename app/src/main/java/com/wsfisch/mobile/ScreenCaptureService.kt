@@ -44,7 +44,7 @@ class ScreenCaptureService : Service() {
         private const val NOTIFICATION_ID = 4102
         private const val TAG = "WSFischCapture"
 
-        private const val MIN_FRAME_INTERVAL_MS = 120L
+        private const val MIN_FRAME_INTERVAL_MS = 60L
         private const val MAX_CAPTURE_PIXELS = 12_000_000L
 
         @Volatile
