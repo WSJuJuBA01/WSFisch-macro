@@ -1258,7 +1258,7 @@ class OverlayControlService : Service() {
         diagnosticsView = null
 
         collapseButton = null
-        collapsedViews.clear()
+        collapsibleViews.clear()
         collapsed = false
     }
 
