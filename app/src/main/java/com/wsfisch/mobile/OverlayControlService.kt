@@ -1,4 +1,3 @@
-
 package com.wsfisch.mobile
 
 import android.app.Service
@@ -22,15 +21,16 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
 /**
- * Расширенная плавающая панель WSFisch.
+ * Плавающая панель управления WSFisch.
  *
  * Возможности:
  * - мониторинг захвата экрана;
  * - мониторинг службы касаний;
  * - статистика жестов;
- * - обновление статуса каждые 100 мс;
+ * - обновление статуса;
  * - перетаскивание панели;
  * - защита от повторного запуска;
+ * - сворачивание подробностей;
  * - управление макросом.
  */
 class OverlayControlService : Service() {
@@ -61,7 +61,16 @@ class OverlayControlService : Service() {
     private var captureStatusView: TextView? = null
     private var diagnosticsView: TextView? = null
 
-    private val stopFlag = AtomicBoolean(false)
+    // Управление сворачиванием.
+    private var collapseButton: Button? = null
+    private var collapsed = false
+
+    // Эти элементы скрываются при сворачивании.
+    private val collapsibleViews =
+        ArrayList<View>()
+
+    private val stopFlag =
+        AtomicBoolean(false)
 
     @Volatile
     private var running = false
@@ -87,7 +96,9 @@ class OverlayControlService : Service() {
         }
     }
 
-    // Цвета интерфейса.
+    // =====================================================
+    // ЦВЕТА
+    // =====================================================
 
     private val backgroundColor =
         Color.rgb(25, 31, 42)
@@ -115,6 +126,10 @@ class OverlayControlService : Service() {
 
     private val errorColor =
         Color.rgb(255, 112, 112)
+
+    // =====================================================
+    // ЖИЗНЕННЫЙ ЦИКЛ
+    // =====================================================
 
     override fun onCreate() {
         super.onCreate()
@@ -154,6 +169,10 @@ class OverlayControlService : Service() {
             return
         }
 
+        collapsed = false
+        collapseButton = null
+        collapsibleViews.clear()
+
         if (!android.provider.Settings.canDrawOverlays(this)) {
 
             Toast.makeText(
@@ -185,7 +204,9 @@ class OverlayControlService : Service() {
             elevation = dp(8).toFloat()
         }
 
-        // Шапка панели.
+        // =================================================
+        // ШАПКА
+        // =================================================
 
         val header = LinearLayout(this).apply {
 
@@ -264,7 +285,32 @@ class OverlayControlService : Service() {
 
         header.addView(headerText)
 
-        // Кнопка закрытия.
+        // =================================================
+        // КНОПКА СВОРАЧИВАНИЯ
+        // =================================================
+
+        val minimizeButton = makeButton(
+            "−",
+            cardColor,
+            36,
+            36
+        ).apply {
+
+            contentDescription =
+                "Свернуть подробности"
+
+            setOnClickListener {
+                setOverlayCollapsed(!collapsed)
+            }
+        }
+
+        collapseButton = minimizeButton
+
+        header.addView(minimizeButton)
+
+        // =================================================
+        // КНОПКА ЗАКРЫТИЯ
+        // =================================================
 
         val closeButton = makeButton(
             "×",
@@ -289,7 +335,9 @@ class OverlayControlService : Service() {
 
         panel.addView(header)
 
-        // Разделитель.
+        // =================================================
+        // РАЗДЕЛИТЕЛЬ
+        // =================================================
 
         val separator = View(this).apply {
             setBackgroundColor(
@@ -306,6 +354,8 @@ class OverlayControlService : Service() {
                 bottomMargin = dp(8)
             }
         )
+
+        collapsibleViews.add(separator)
 
         // =================================================
         // СТАТУС МАКРОСА
@@ -331,6 +381,8 @@ class OverlayControlService : Service() {
         macroCard.addView(macroStatusView)
 
         panel.addView(macroCard)
+
+        collapsibleViews.add(macroCard)
 
         // =================================================
         // СЛУЖБЫ
@@ -401,6 +453,8 @@ class OverlayControlService : Service() {
 
         panel.addView(statusRow)
 
+        collapsibleViews.add(statusRow)
+
         // =================================================
         // ДИАГНОСТИКА
         // =================================================
@@ -425,8 +479,11 @@ class OverlayControlService : Service() {
 
         panel.addView(diagnosticsView)
 
+        collapsibleViews.add(diagnosticsView!!)
+
         // =================================================
-        // КНОПКИ
+        // КНОПКИ ЗАПУСКА И ОСТАНОВКИ
+        // Эти кнопки остаются видимыми всегда.
         // =================================================
 
         val actions = LinearLayout(this).apply {
@@ -485,7 +542,9 @@ class OverlayControlService : Service() {
 
         panel.addView(actions)
 
-        // Кнопка обновления вручную.
+        // =================================================
+        // РУЧНОЕ ОБНОВЛЕНИЕ
+        // =================================================
 
         val refreshButton = makeButton(
             "↻  ОБНОВИТЬ СОСТОЯНИЕ",
@@ -509,6 +568,8 @@ class OverlayControlService : Service() {
         }
 
         panel.addView(refreshButton)
+
+        collapsibleViews.add(refreshButton)
 
         // =================================================
         // ОКНО
@@ -569,7 +630,66 @@ class OverlayControlService : Service() {
                 Toast.LENGTH_LONG
             ).show()
 
+            removeOverlay()
             stopSelf()
+        }
+    }
+
+    // =====================================================
+    // СВОРАЧИВАНИЕ И РАЗВОРАЧИВАНИЕ
+    // =====================================================
+
+    private fun setOverlayCollapsed(value: Boolean) {
+
+        val panel =
+            overlay ?: return
+
+        if (collapsed == value) return
+
+        collapsed = value
+
+        val visibility =
+            if (collapsed) {
+                View.GONE
+            } else {
+                View.VISIBLE
+            }
+
+        // Скрываем только подробности.
+        // Шапка и кнопки ЗАПУСК/СТОП остаются на экране.
+        collapsibleViews.forEach { view ->
+            view.visibility = visibility
+        }
+
+        collapseButton?.apply {
+
+            text =
+                if (collapsed) {
+                    "+"
+                } else {
+                    "−"
+                }
+
+            contentDescription =
+                if (collapsed) {
+                    "Развернуть панель"
+                } else {
+                    "Свернуть подробности"
+                }
+        }
+
+        panel.requestLayout()
+
+        val params = overlayParams
+
+        if (params != null) {
+            try {
+                windowManager.updateViewLayout(
+                    panel,
+                    params
+                )
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -877,18 +997,18 @@ class OverlayControlService : Service() {
                 val statusColor = when {
 
                     "ошибка" in lowered ||
-                    "отклон" in lowered -> {
+                        "отклон" in lowered -> {
                         errorColor
                     }
 
                     "останов" in lowered ||
-                    "тайм-аут" in lowered -> {
+                        "тайм-аут" in lowered -> {
                         warningColor
                     }
 
                     "готово" in lowered ||
-                    "запуск" in lowered ||
-                    "мини-игра" in lowered -> {
+                        "запуск" in lowered ||
+                        "мини-игра" in lowered -> {
                         successColor
                     }
 
@@ -1118,27 +1238,28 @@ class OverlayControlService : Service() {
             refreshRunnable
         )
 
-        val old =
-            overlay ?: return
+        val old = overlay
 
-        try {
+        if (old != null) {
+            try {
 
-            windowManager.removeView(old)
+                windowManager.removeView(old)
 
-        } catch (_: Exception) {
+            } catch (_: Exception) {
+            }
         }
 
         overlay = null
-
         overlayParams = null
 
         macroStatusView = null
-
         touchStatusView = null
-
         captureStatusView = null
-
         diagnosticsView = null
+
+        collapseButton = null
+        collapsedViews.clear()
+        collapsed = false
     }
 
     override fun onDestroy() {
