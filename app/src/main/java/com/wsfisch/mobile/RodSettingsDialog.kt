@@ -1,303 +1,433 @@
 package com.wsfisch.mobile
 
-/**
- * Профили специальных удочек WSFisch Android.
- *
- * Original project: WSFisch macro / DeepFish BETA by Yato.
- * Personal modification context: WSJuJuBA01.
- *
- * Профиль описывает требуемую механику и режим обнаружения.
- * Реальная работа каждого специального детектора должна быть подключена
- * к FischVision и MacroRunner.
- */
-object RodProfiles {
+import android.app.Activity
+import android.app.AlertDialog
+import android.graphics.Color
+import android.text.InputType
+import android.view.ViewGroup
+import android.widget.CheckBox
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
 
-    const val ATTRIBUTION = "Original macro by Yato"
+object RodSettingsDialog {
 
-    enum class DetectionMode {
-        DEFAULT,
-        COLOR_TRACKING,
-        NOTE_TRACKING,
-        GREEN_ZONE,
-        DARK_RED_BAR,
-        AUTO_BAR,
-        SPECIAL_MARKER,
-        ZODIAC
-    }
+    private const val PREFS = "mobile_macro_rod_settings"
 
-    enum class ControlMode {
-        ADAPTIVE,
-        PRECISION,
-        LINES,
-        NOTE_PRIORITY,
-        REVERSED_AFTER_DELAY
-    }
-
-    enum class Mechanic {
-        NONE,
-        FALLING_NOTES,
-        REQUIEM_HOLD_RELEASE,
-        DARKHEART_CONTROL,
-        BELLONA_CONTROL,
-        DREAMBREAKER_REVERSE,
-        TRANQUILITY_MANIA,
-        NOISEFORM_TRACKING,
-        VERDANT_GREEN_ZONE,
-        LULLABY_LIGHT_SECTORS,
-        CASTBOUND_SWORD_MARKER,
-        REMEMBRANCE_MODE,
-        MIGU_AUTO_BAR,
-        HALIBUT_EXCLAMATION,
-        SPLITBRANCH_FISH_PICK,
-        ASTRAENUS_PRESET,
-        TRYHARD_DARK_RED_BAR,
-        CHASM_PRESET,
-        STELLAR_ZODIAC
-    }
-
-    data class Profile(
-        val name: String,
-        val detectionMode: DetectionMode,
-        val controlMode: ControlMode,
-        val mechanics: Set<Mechanic> = emptySet(),
-        val fishColorKey: String? = null,
-        val barColorKey: String? = null,
-        val trackColorKey: String? = null,
-        val headColorKey: String? = null,
-        val requiresNoteDetection: Boolean = false,
-        val supportsColorCalibration: Boolean = false,
-        val hasCustomMinigame: Boolean = false
+    private data class Setting(
+        val key: String,
+        val title: String,
+        val defaultValue: String,
+        val numeric: Boolean = true
     )
 
-    private val profiles = listOf(
-        Profile(
-            name = "None",
-            detectionMode = DetectionMode.DEFAULT,
-            controlMode = ControlMode.ADAPTIVE,
-            mechanics = setOf(Mechanic.NONE)
-        ),
+    private val castSettings = listOf(
+        Setting("CastXPercent", "Положение заброса X (%)", "50"),
+        Setting("CastYPercent", "Положение заброса Y (%)", "50"),
+        Setting("CastHoldMs", "Удержание заброса (мс)", "1000"),
+        Setting("WaitForBobberMs", "Ожидание поплавка (мс)", "1000"),
+        Setting("ShakeTimeoutMs", "Тайм-аут поиска поклёвки (мс)", "35000"),
+        Setting("ReelTimeoutMs", "Тайм-аут мини-игры (мс)", "120000"),
+        Setting("RecastDelayMs", "Пауза между забросами (мс)", "1000")
+    )
 
-        Profile(
-            name = "Pinions Aria",
-            detectionMode = DetectionMode.NOTE_TRACKING,
-            controlMode = ControlMode.NOTE_PRIORITY,
-            mechanics = setOf(Mechanic.FALLING_NOTES),
-            requiresNoteDetection = true,
-            hasCustomMinigame = true
-        ),
+    private val reelSettings = listOf(
+        Setting("ReelMinHold", "Requiem: минимальное удержание (мс)", "200"),
+        Setting("ReelMinRelease", "Requiem: минимальное отпускание (мс)", "200"),
+        Setting("ManiaLead", "Tranquility: упреждение Mania (мс)", "45"),
+        Setting("NoteHandoff", "Pinions: передача цели (px)", "50"),
+        Setting("LullRadiusPct", "Lullaby: радиус поиска (%)", "16"),
+        Setting("LullPivotUp", "Lullaby: смещение центра (%)", "26"),
+        Setting("LullLightLum", "Lullaby: яркость света", "90"),
+        Setting("LullArmDelta", "Lullaby: разница яркости", "45"),
+        Setting("LullTrigPct", "Lullaby: порог срабатывания (%)", "10"),
+        Setting("LullClearMs", "Lullaby: задержка очистки (мс)", "100"),
+        Setting("LullMinDeg", "Lullaby: минимальный угол", "4")
+    )
 
-        Profile(
-            name = "Requiem",
-            detectionMode = DetectionMode.DEFAULT,
-            controlMode = ControlMode.PRECISION,
-            mechanics = setOf(Mechanic.REQUIEM_HOLD_RELEASE),
-            hasCustomMinigame = true
-        ),
+    private val tuningSettings = listOf(
+        Setting("StableRightMultiplier", "Stable: правый множитель", "2.1"),
+        Setting("StableRightDivision", "Stable: правое деление", "1.4"),
+        Setting("StableLeftMultiplier", "Stable: левый множитель", "1.1"),
+        Setting("StableLeftDivision", "Stable: левое деление", "1.0"),
+        Setting("UnstableRightMultiplier", "Unstable: правый множитель", "2.4"),
+        Setting("UnstableRightDivision", "Unstable: правое деление", "1.5"),
+        Setting("UnstableLeftMultiplier", "Unstable: левый множитель", "1.3"),
+        Setting("UnstableLeftDivision", "Unstable: левое деление", "1.1"),
+        Setting("RightAnkleBreakMultiplier", "Right ankle break", "1"),
+        Setting("LeftAnkleBreakMultiplier", "Left ankle break", "0.9"),
+        Setting("Kp", "Precision: Kp", "0.5"),
+        Setting("Kd", "Precision: Kd", "0.3"),
+        Setting("VelocitySmoothing", "Сглаживание скорости", "0.2"),
+        Setting("StoppingDistanceMultiplier", "Stopping distance", "3.0")
+    )
 
-        Profile(
-            name = "Darkheart",
-            detectionMode = DetectionMode.DEFAULT,
-            controlMode = ControlMode.PRECISION,
-            mechanics = setOf(Mechanic.DARKHEART_CONTROL),
-            hasCustomMinigame = true
-        ),
+    private val colorSettings = listOf(
+        Setting("TryhardBarColors", "Tryhard: цвет полосы", "", false),
+        Setting("TryhardFishColors", "Tryhard: цвет рыбы", "", false),
+        Setting("TryhardTrackColors", "Tryhard: цвет дорожки", "", false),
 
-        Profile(
-            name = "Bellona's Waraxe",
-            detectionMode = DetectionMode.DEFAULT,
-            controlMode = ControlMode.PRECISION,
-            mechanics = setOf(Mechanic.BELLONA_CONTROL),
-            hasCustomMinigame = true
-        ),
+        Setting("CastboundBarColors", "Castbound: цвет полосы", "", false),
+        Setting("CastboundFishColors", "Castbound: цвет меча", "0x5522A3", false),
+        Setting("CastboundTrackColors", "Castbound: цвет дорожки", "", false),
 
-        Profile(
-            name = "Dreambreaker",
-            detectionMode = DetectionMode.DEFAULT,
-            controlMode = ControlMode.REVERSED_AFTER_DELAY,
-            mechanics = setOf(Mechanic.DREAMBREAKER_REVERSE),
-            hasCustomMinigame = true
-        ),
+        Setting("MiguFishColors", "MiguRod: цвет рыбы", "", false),
 
-        Profile(
-            name = "Tranquility",
-            detectionMode = DetectionMode.NOTE_TRACKING,
-            controlMode = ControlMode.NOTE_PRIORITY,
-            mechanics = setOf(Mechanic.TRANQUILITY_MANIA),
-            requiresNoteDetection = true,
-            hasCustomMinigame = true
-        ),
+        Setting("VerdantBarColors", "Verdant Oath: цвет зелёной зоны", "", false),
+        Setting("VerdantFishColors", "Verdant Oath: цвет рыбы", "", false),
 
-        Profile(
-            name = "Noiseform",
-            detectionMode = DetectionMode.COLOR_TRACKING,
-            controlMode = ControlMode.ADAPTIVE,
-            mechanics = setOf(Mechanic.NOISEFORM_TRACKING),
-            requiresNoteDetection = true,
-            hasCustomMinigame = true
-        ),
+        Setting("StellarBarColors", "Stellarwave: цвет полосы", "0x55446D", false),
+        Setting("StellarFishColors", "Stellarwave: цвет рыбы", "0xAFDAE8", false),
+        Setting("StellarHeadColors", "Stellarwave: цвет головы", "0xFFFFFF", false)
+    )
 
-        Profile(
-            name = "Verdant Oath",
-            detectionMode = DetectionMode.GREEN_ZONE,
-            controlMode = ControlMode.LINES,
-            mechanics = setOf(Mechanic.VERDANT_GREEN_ZONE),
-            fishColorKey = "VerdantFishColors",
-            barColorKey = "VerdantBarColors",
-            supportsColorCalibration = true,
-            hasCustomMinigame = true
-        ),
+    private val toleranceSettings = listOf(
+        Setting("TryhardBarTol", "Tryhard: допуск полосы", "20"),
+        Setting("TryhardFishTol", "Tryhard: допуск рыбы", "14"),
+        Setting("TryhardTrackTol", "Tryhard: допуск дорожки", "20"),
 
-        Profile(
-            name = "Lullaby",
-            detectionMode = DetectionMode.NOTE_TRACKING,
-            controlMode = ControlMode.NOTE_PRIORITY,
-            mechanics = setOf(Mechanic.LULLABY_LIGHT_SECTORS),
-            requiresNoteDetection = true,
-            hasCustomMinigame = true
-        ),
+        Setting("CastboundBarTol", "Castbound: допуск полосы", "20"),
+        Setting("CastboundFishTol", "Castbound: допуск меча", "20"),
+        Setting("CastboundTrackTol", "Castbound: допуск дорожки", "20"),
 
-        Profile(
-            name = "Castbound",
-            detectionMode = DetectionMode.COLOR_TRACKING,
-            controlMode = ControlMode.ADAPTIVE,
-            mechanics = setOf(Mechanic.CASTBOUND_SWORD_MARKER),
-            fishColorKey = "CastboundFishColors",
-            barColorKey = "CastboundBarColors",
-            trackColorKey = "CastboundTrackColors",
-            supportsColorCalibration = true
-        ),
+        Setting("VerdantBarTol", "Verdant: допуск зелёной зоны", "20"),
+        Setting("VerdantFishTol", "Verdant: допуск рыбы", "20"),
 
-        Profile(
-            name = "Remembrance",
-            detectionMode = DetectionMode.SPECIAL_MARKER,
-            controlMode = ControlMode.ADAPTIVE,
-            mechanics = setOf(Mechanic.REMEMBRANCE_MODE),
-            hasCustomMinigame = true
-        ),
+        Setting("MiguFishTol", "MiguRod: допуск рыбы", "20"),
 
-        Profile(
-            name = "MiguRod",
-            detectionMode = DetectionMode.AUTO_BAR,
-            controlMode = ControlMode.ADAPTIVE,
-            mechanics = setOf(Mechanic.MIGU_AUTO_BAR),
-            fishColorKey = "MiguFishColors",
-            supportsColorCalibration = true
-        ),
+        Setting("StellarBarTol", "Stellarwave: допуск полосы", "26"),
+        Setting("StellarFishTol", "Stellarwave: допуск рыбы", "22"),
+        Setting("StellarHeadTol", "Stellarwave: допуск головы", "30")
+    )
 
-        Profile(
-            name = "Halibut Harpoon",
-            detectionMode = DetectionMode.SPECIAL_MARKER,
-            controlMode = ControlMode.ADAPTIVE,
-            mechanics = setOf(Mechanic.HALIBUT_EXCLAMATION),
-            hasCustomMinigame = true
-        ),
-
-        Profile(
-            name = "Splitbranch Twig",
-            detectionMode = DetectionMode.SPECIAL_MARKER,
-            controlMode = ControlMode.ADAPTIVE,
-            mechanics = setOf(Mechanic.SPLITBRANCH_FISH_PICK),
-            hasCustomMinigame = true
-        ),
-
-        Profile(
-            name = "Astraenus Serenade",
-            detectionMode = DetectionMode.DEFAULT,
-            controlMode = ControlMode.ADAPTIVE,
-            mechanics = setOf(Mechanic.ASTRAENUS_PRESET)
-        ),
-
-        Profile(
-            name = "Tryhard Rod",
-            detectionMode = DetectionMode.DARK_RED_BAR,
-            controlMode = ControlMode.ADAPTIVE,
-            mechanics = setOf(Mechanic.TRYHARD_DARK_RED_BAR),
-            fishColorKey = "TryhardFishColors",
-            barColorKey = "TryhardBarColors",
-            trackColorKey = "TryhardTrackColors",
-            supportsColorCalibration = true
-        ),
-
-        Profile(
-            name = "Chasm Stalker",
-            detectionMode = DetectionMode.DEFAULT,
-            controlMode = ControlMode.ADAPTIVE,
-            mechanics = setOf(Mechanic.CHASM_PRESET)
-        ),
-
-        Profile(
-            name = "Stellarwave Melody",
-            detectionMode = DetectionMode.ZODIAC,
-            controlMode = ControlMode.ADAPTIVE,
-            mechanics = setOf(Mechanic.STELLAR_ZODIAC),
-            fishColorKey = "StellarFishColors",
-            barColorKey = "StellarBarColors",
-            headColorKey = "StellarHeadColors",
-            supportsColorCalibration = true,
-            hasCustomMinigame = true
+    fun show(
+        activity: Activity,
+        onSaved: () -> Unit = {}
+    ) {
+        val prefs = activity.getSharedPreferences(
+            PREFS,
+            Activity.MODE_PRIVATE
         )
-    )
 
-    private val profilesByName: Map<String, Profile> =
-        profiles.associateBy { normalize(it.name) }
+        val density = activity.resources.displayMetrics.density
 
-    /**
-     * Все доступные названия.
-     * 18 специальных профилей + обычная удочка None.
-     */
-    fun names(): Array<String> =
-        profiles.map { it.name }.toTypedArray()
+        fun dp(value: Int): Int =
+            (value * density).toInt()
 
-    fun all(): List<Profile> =
-        profiles.toList()
+        val background = Color.rgb(22, 26, 34)
+        val mainText = Color.rgb(239, 243, 249)
+        val mutedText = Color.rgb(165, 176, 193)
 
-    /**
-     * Совместимость со старыми значениями SharedPreferences.
-     */
-    private fun canonicalName(value: String?): String {
-        val name = value?.trim().orEmpty()
-
-        return when {
-            name.equals("Pinion Aria", ignoreCase = true) ->
-                "Pinions Aria"
-
-            name.equals("Tryhard", ignoreCase = true) ->
-                "Tryhard Rod"
-
-            name.equals("Halibut", ignoreCase = true) ->
-                "Halibut Harpoon"
-
-            else -> name
+        val root = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(12), dp(18), dp(12))
+            setBackgroundColor(background)
         }
+
+        fun addTitle(value: String) {
+            root.addView(
+                TextView(activity).apply {
+                    text = value
+                    textSize = 17f
+                    setTextColor(mainText)
+                    setPadding(0, dp(16), 0, dp(7))
+                }
+            )
+        }
+
+        fun addHint(value: String) {
+            root.addView(
+                TextView(activity).apply {
+                    text = value
+                    textSize = 11f
+                    setTextColor(mutedText)
+                    setPadding(0, dp(5), 0, dp(8))
+                }
+            )
+        }
+
+        fun addDivider() {
+            root.addView(
+                TextView(activity).apply {
+                    setBackgroundColor(Color.rgb(51, 58, 70))
+                    height = dp(1)
+                },
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(1)
+            )
+        }
+
+        val rodButton = TextView(activity).apply {
+            textSize = 16f
+            setTextColor(mainText)
+            setPadding(0, dp(12), 0, dp(12))
+        }
+
+        fun updateRodButton() {
+            val selected = prefs.getString("SpecialRod", "None") ?: "None"
+            rodButton.text = "Удочка: $selected\nНажми, чтобы изменить"
+        }
+
+        updateRodButton()
+
+        rodButton.setOnClickListener {
+            val names = RodProfiles.names()
+            val current = prefs.getString("SpecialRod", "None") ?: "None"
+            val selectedIndex = names.indexOf(
+                RodProfiles.canonicalize(current)
+            ).coerceAtLeast(0)
+
+            AlertDialog.Builder(activity)
+                .setTitle("Выбор удочки")
+                .setSingleChoiceItems(names, selectedIndex) { dialog, which ->
+                    prefs.edit()
+                        .putString("SpecialRod", names[which])
+                        .apply()
+
+                    updateRodButton()
+                    dialog.dismiss()
+                }
+                .setNegativeButton("Отмена", null)
+                .show()
+        }
+
+        root.addView(rodButton)
+
+        val controlModes = arrayOf(
+            "Adaptive",
+            "Precision",
+            "Lines"
+        )
+
+        var selectedControlMode =
+            prefs.getString("ControlMode", "Adaptive") ?: "Adaptive"
+
+        val controlButton = TextView(activity).apply {
+            textSize = 14f
+            setTextColor(mainText)
+            setPadding(0, dp(8), 0, dp(12))
+        }
+
+        fun updateControlButton() {
+            controlButton.text =
+                "Режим управления: $selectedControlMode\nНажми, чтобы изменить"
+        }
+
+        updateControlButton()
+
+        controlButton.setOnClickListener {
+            val index = controlModes.indexOf(selectedControlMode)
+                .coerceAtLeast(0)
+
+            AlertDialog.Builder(activity)
+                .setTitle("Режим управления")
+                .setSingleChoiceItems(controlModes, index) { dialog, which ->
+                    selectedControlMode = controlModes[which]
+                    updateControlButton()
+                    dialog.dismiss()
+                }
+                .setNegativeButton("Отмена", null)
+                .show()
+        }
+
+        root.addView(controlButton)
+        addDivider()
+
+        val halibut = CheckBox(activity).apply {
+            text = "Halibut Harpoon: играть с маркером-восклицанием"
+            setTextColor(mainText)
+            isChecked = prefs.getBoolean("HalibutPlayMinigame", true)
+        }
+
+        val stellarClickSigns = CheckBox(activity).apply {
+            text = "Stellarwave: нажимать знаки Zodiac"
+            setTextColor(mainText)
+            isChecked = prefs.getBoolean("SwClickSigns", true)
+        }
+
+        val stellarFastClicks = CheckBox(activity).apply {
+            text = "Stellarwave: быстрые нажатия"
+            setTextColor(mainText)
+            isChecked = prefs.getBoolean("SwFastClicks", false)
+        }
+
+        val stellarRetryClicks = CheckBox(activity).apply {
+            text = "Stellarwave: повторять неподтверждённые клики"
+            setTextColor(mainText)
+            isChecked = prefs.getBoolean("SwRetryClicks", false)
+        }
+
+        val remembranceDeparted = CheckBox(activity).apply {
+            text = "Remembrance: режим Departed (выключено = Living)"
+            setTextColor(mainText)
+            isChecked = prefs.getString("RemembranceMode", "Living") == "Departed"
+        }
+
+        root.addView(halibut)
+        root.addView(stellarClickSigns)
+        root.addView(stellarFastClicks)
+        root.addView(stellarRetryClicks)
+        root.addView(remembranceDeparted)
+
+        val editors = linkedMapOf<String, EditText>()
+        val settingDefinitions = linkedMapOf<String, Setting>()
+
+        fun addSettings(
+            title: String,
+            settings: List<Setting>
+        ) {
+            addTitle(title)
+
+            settings.forEach { setting ->
+                settingDefinitions[setting.key] = setting
+
+                root.addView(
+                    TextView(activity).apply {
+                        text = setting.title
+                        textSize = 12f
+                        setTextColor(mutedText)
+                        setPadding(0, dp(5), 0, 0)
+                    }
+                )
+
+                val editor = EditText(activity).apply {
+                    inputType = if (setting.numeric) {
+                        InputType.TYPE_CLASS_NUMBER or
+                            InputType.TYPE_NUMBER_FLAG_DECIMAL or
+                            InputType.TYPE_NUMBER_FLAG_SIGNED
+                    } else {
+                        InputType.TYPE_CLASS_TEXT
+                    }
+
+                    isSingleLine = true
+                    setTextColor(mainText)
+                    setHintTextColor(mutedText)
+                    setHint(setting.defaultValue)
+
+                    setText(
+                        prefs.getString(
+                            setting.key,
+                            setting.defaultValue
+                        )
+                    )
+                }
+
+                editors[setting.key] = editor
+
+                root.addView(
+                    editor,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(46)
+                )
+            }
+        }
+
+        addSettings("ЗАБРОС И ЦИКЛ", castSettings)
+        addHint(
+            "X/Y — координаты удержания относительно размеров экрана. " +
+                "50/50 означает центр."
+        )
+
+        addSettings("ОСОБЫЕ МЕХАНИКИ", reelSettings)
+        addSettings("НАСТРОЙКА УПРАВЛЕНИЯ", tuningSettings)
+        addSettings("ЦВЕТОВАЯ КАЛИБРОВКА (HEX)", colorSettings)
+        addSettings("ДОПУСКИ ЦВЕТОВ", toleranceSettings)
+
+        addTitle("АТРИБУЦИЯ")
+        addHint(
+            "Original project: WSFisch macro / DeepFish BETA by Yato.\n" +
+                "Android Kotlin port context: WSJuJuBA01."
+        )
+
+        addTitle("СОСТОЯНИЕ ПЕРЕНОСА")
+        addHint(
+            "Сохранение параметров не означает, что соответствующий " +
+                "детектор уже реализован. Для каждой уникальной механики " +
+                "нужна отдельная обработка в FischVision и MacroRunner."
+        )
+
+        val scroll = ScrollView(activity).apply {
+            setBackgroundColor(background)
+            isFillViewport = true
+            addView(root)
+        }
+
+        AlertDialog.Builder(activity)
+            .setTitle("Настройки WSFisch")
+            .setView(scroll)
+            .setNegativeButton("Отмена", null)
+            .setPositiveButton("Сохранить") { _, _ ->
+
+                fun intValue(key: String): Int? =
+                    editors[key]
+                        ?.text
+                        ?.toString()
+                        ?.trim()
+                        ?.toIntOrNull()
+
+                val castX = intValue("CastXPercent")
+                val castY = intValue("CastYPercent")
+                val castHold = intValue("CastHoldMs")
+                val waitBobber = intValue("WaitForBobberMs")
+                val shakeTimeout = intValue("ShakeTimeoutMs")
+                val reelTimeout = intValue("ReelTimeoutMs")
+                val recastDelay = intValue("RecastDelayMs")
+
+                val valid =
+                    castX != null && castX in 0..100 &&
+                    castY != null && castY in 0..100 &&
+                    castHold != null && castHold in 250..5000 &&
+                    waitBobber != null && waitBobber in 250..5000 &&
+                    shakeTimeout != null && shakeTimeout in 10000..90000 &&
+                    reelTimeout != null && reelTimeout in 30000..180000 &&
+                    recastDelay != null && recastDelay in 300..5000
+
+                if (!valid) {
+                    AlertDialog.Builder(activity)
+                        .setTitle("Некорректные настройки")
+                        .setMessage(
+                            "Проверь значения:\n\n" +
+                                "X/Y: 0–100\n" +
+                                "Удержание и ожидание: 250–5000 мс\n" +
+                                "Поиск поклёвки: 10000–90000 мс\n" +
+                                "Мини-игра: 30000–180000 мс\n" +
+                                "Пауза: 300–5000 мс"
+                        )
+                        .setPositiveButton("OK", null)
+                        .show()
+
+                    return@setPositiveButton
+                }
+
+                val editor = prefs.edit()
+                    .putString("SpecialRod", RodProfiles.canonicalize(
+                        prefs.getString("SpecialRod", "None")
+                    ))
+                    .putString("ControlMode", selectedControlMode)
+                    .putBoolean("HalibutPlayMinigame", halibut.isChecked)
+                    .putBoolean("SwClickSigns", stellarClickSigns.isChecked)
+                    .putBoolean("SwFastClicks", stellarFastClicks.isChecked)
+                    .putBoolean("SwRetryClicks", stellarRetryClicks.isChecked)
+                    .putString(
+                        "RemembranceMode",
+                        if (remembranceDeparted.isChecked) {
+                            "Departed"
+                        } else {
+                            "Living"
+                        }
+                    )
+
+                editors.forEach { (key, field) ->
+                    val value = field.text.toString().trim()
+                    if (value.isNotEmpty()) {
+                        editor.putString(key, value)
+                    }
+                }
+
+                editor.apply()
+                onSaved()
+            }
+            .show()
     }
-
-    private fun normalize(value: String): String =
-        value.trim().lowercase()
-
-    fun get(name: String?): Profile {
-        val canonical = canonicalName(name)
-        return profilesByName[normalize(canonical)]
-            ?: profiles.first()
-    }
-
-    fun canonicalize(name: String?): String =
-        get(name).name
-
-    fun isKnown(name: String?): Boolean {
-        val canonical = canonicalName(name)
-        return profilesByName.containsKey(normalize(canonical))
-    }
-
-    fun hasMechanic(
-        rodName: String?,
-        mechanic: Mechanic
-    ): Boolean {
-        return get(rodName).mechanics.contains(mechanic)
-    }
-
-    fun defaultControlMode(name: String?): ControlMode =
-        get(name).controlMode
-
-    fun defaultDetectionMode(name: String?): DetectionMode =
-        get(name).detectionMode
 }
